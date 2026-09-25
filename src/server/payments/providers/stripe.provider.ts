@@ -71,6 +71,10 @@ export function verifyStripeSignature(args: { secret: string; header: string | n
   return age <= (args.toleranceSec ?? 300);
 }
 
+export function isOrganizationKey(key: string): boolean {
+  return key.startsWith("sk_org_");
+}
+
 function sessionStatus(s: StripeCheckoutSession): PaymentStatus {
   if (s.status === "complete" && s.payment_status === "paid") return "PAID";
   if (s.status === "expired") return "EXPIRED";
@@ -85,16 +89,21 @@ export class StripeProvider implements PaymentProvider {
 
   isConfigured(): boolean {
     const e = env();
-    return Boolean(e.STRIPE_SECRET_KEY && e.STRIPE_WEBHOOK_SECRET);
+    if (!e.STRIPE_SECRET_KEY || !e.STRIPE_WEBHOOK_SECRET) return false;
+    // Organization keys (sk_org_...) must name the target account on every call.
+    return !isOrganizationKey(e.STRIPE_SECRET_KEY) || Boolean(e.STRIPE_ACCOUNT_ID);
   }
 
   private async request<T>(method: "GET" | "POST", path: string, params?: Record<string, unknown>, idempotencyKey?: string): Promise<T> {
+    const e = env();
     const qs = method === "GET" && params ? `?${formEncode(params)}` : "";
     const res = await fetch(`${API}${path}${qs}`, {
       method,
       headers: {
-        authorization: `Bearer ${env().STRIPE_SECRET_KEY}`,
+        authorization: `Bearer ${e.STRIPE_SECRET_KEY}`,
         "content-type": "application/x-www-form-urlencoded",
+        "stripe-version": e.STRIPE_API_VERSION,
+        ...(e.STRIPE_ACCOUNT_ID ? { "stripe-context": e.STRIPE_ACCOUNT_ID } : {}),
         ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
       },
       body: method === "POST" && params ? formEncode(params) : undefined,

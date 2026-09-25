@@ -33,6 +33,10 @@ const schema = z.object({
 
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  /** Required only with an Organization API key (sk_org_...): the target account (acct_...). */
+  STRIPE_ACCOUNT_ID: z.string().regex(/^acct_[A-Za-z0-9]+$/).optional(),
+  /** Pinned Stripe API version (org keys require one explicitly). */
+  STRIPE_API_VERSION: z.string().default("2025-09-30.clover"),
 
   BINANCE_API_KEY: z.string().optional(),
   BINANCE_API_SECRET: z.string().optional(),
