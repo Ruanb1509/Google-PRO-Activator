@@ -4,7 +4,11 @@ const order: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 
 const minLevel = (process.env.LOG_LEVEL as Level) || (process.env.NODE_ENV === "production" ? "info" : "debug");
 
 function serializeError(err: unknown): unknown {
-  if (err instanceof Error) return { name: err.name, message: err.message, stack: err.stack };
+  if (err instanceof Error) {
+    // Keep extra fields such as ProviderError.httpStatus / body (the provider's reason for rejecting).
+    const { name, message, stack, ...extra } = err as Error & Record<string, unknown>;
+    return { ...extra, name, message, stack };
+  }
   return err;
 }
 

@@ -81,6 +81,7 @@ export class MercadoPagoProvider implements PaymentProvider {
   readonly name = "mercadopago";
   readonly supportedCurrencies = ["BRL"] as const;
   readonly usesWebhooks = true;
+  readonly minTtlMinutes = 35; // Pix date_of_expiration must be at least 30 minutes after creation (margin for latency)
 
   isConfigured(): boolean {
     const e = env();
