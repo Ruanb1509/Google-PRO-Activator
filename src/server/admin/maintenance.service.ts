@@ -7,12 +7,14 @@ import { retryPendingDeliveries } from "@/server/notifications/delivery.service"
 import { applyPaymentStatus } from "@/server/orders/payment-lifecycle.service";
 import { findProvider } from "@/server/payments/registry";
 import { expireDeposits } from "@/server/wallet/deposit.service";
+import { notifyRestocks } from "@/server/inventory/stock-alerts.service";
 
 /**
  * Periodic housekeeping (Vercel Cron + opportunistic, throttled runs):
  *  - reconcile/expire pending orders (asks the provider before expiring => lost webhooks are recovered)
  *  - release timed-out stock reservations
  *  - retry failed deliveries
+ *  - notify customers waiting for products that are back in stock
  *  - expire deposits, purge old sessions/rate-limit rows
  */
 export async function runMaintenance() {
@@ -76,6 +78,7 @@ export async function runMaintenance() {
 
   report.releasedReservations = await releaseExpiredReservations();
   report.deliveriesRetried = await retryPendingDeliveries();
+  report.restockNotified = await notifyRestocks({ limit: 100 }).catch((err) => (logger.error("stock_alert.run_failed", { err }), 0));
   report.depositsExpired = await expireDeposits();
   report.sessionsPurged = await cleanupSessions();
   report.rateLimitRowsPurged = await cleanupRateLimits();

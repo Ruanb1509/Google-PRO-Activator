@@ -114,6 +114,7 @@ model User {
   inventoryItems InventoryItem[]
   botEvents      BotEvent[]
   tickets        SupportTicket[]
+  stockAlerts    StockAlert[]
 
   @@map("users")
 }
@@ -140,6 +141,7 @@ model Product {
 
   inventoryItems InventoryItem[]
   orders         Order[]
+  stockAlerts    StockAlert[]
 
   @@index([isActive, deletedAt])
   @@map("products")
@@ -471,4 +473,18 @@ model RateLimit {
 
   @@index([windowStart])
   @@map("rate_limits")
+}
+
+/// "Notify me when back in stock" requests from customers; deleted once the customer is notified.
+model StockAlert {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  productId String   @map("product_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([productId, createdAt])
+  @@map("stock_alerts")
 }

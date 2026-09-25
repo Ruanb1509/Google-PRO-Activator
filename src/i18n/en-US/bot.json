@@ -15,7 +15,7 @@
   "choose_product": "🛒 <b>Choose a product:</b>",
   "no_products": "There are no products available right now. Please come back later!",
   "product_details": "<b>{name}</b>\n\n{description}\n\n🇧🇷 {priceBrl}\n🌎 {priceUsd}\n\n📦 Available: {stock}",
-  "out_of_stock": "😕 Product out of stock.",
+  "out_of_stock": "😕 Product out of stock. Tap <b>🔔 Notify me</b> and we'll message you as soon as it's back.",
   "choose_payment": "💳 <b>Choose a payment method:</b>",
   "no_payment_methods": "No payment method is available right now. Please try again later.",
   "order_created": "🧾 <b>Order #{number}</b>\nProduct: {product}\nAmount: <b>{amount}</b>\n\n⏳ Expires in {minutes} minutes.",
@@ -96,5 +96,12 @@
   "support_closed": "✅ Ticket #{number} closed. Thank you! If you need anything else, open a new one in 💬 Support.",
   "support_closed_by_team": "✅ Ticket #{number} was closed by our support team. If you need anything, open a new one in 💬 Support.",
   "support_empty": "Send a text or an image.",
-  "support_too_long": "Message too long. Please split it into smaller parts."
+  "support_too_long": "Message too long. Please split it into smaller parts.",
+  "notify_me": "🔔 Notify me when available",
+  "notify_me_on": "✅ Alert on (tap to cancel)",
+  "notify_me_subscribed": "🔔 Done! We'll let you know when this product is back in stock.",
+  "notify_me_cancelled": "Stock alert cancelled.",
+  "sold_out_tag": "sold out",
+  "restock_notice": "🔔 <b>{name}</b> is back in stock! Get yours before it runs out.",
+  "restock_view_product": "🛒 View product"
 }

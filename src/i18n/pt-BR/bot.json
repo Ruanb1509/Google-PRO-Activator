@@ -15,7 +15,7 @@
   "choose_product": "🛒 <b>Escolha um produto:</b>",
   "no_products": "No momento não há produtos disponíveis. Volte mais tarde!",
   "product_details": "<b>{name}</b>\n\n{description}\n\n🇧🇷 {priceBrl}\n🌎 {priceUsd}\n\n📦 Disponível: {stock}",
-  "out_of_stock": "😕 Produto sem estoque no momento.",
+  "out_of_stock": "😕 Produto sem estoque no momento. Toque em <b>🔔 Avise-me</b> e você recebe uma mensagem assim que ele voltar.",
   "choose_payment": "💳 <b>Escolha a forma de pagamento:</b>",
   "no_payment_methods": "Nenhuma forma de pagamento está disponível agora. Tente novamente mais tarde.",
   "order_created": "🧾 <b>Pedido #{number}</b>\nProduto: {product}\nValor: <b>{amount}</b>\n\n⏳ Expira em {minutes} minutos.",
@@ -96,5 +96,12 @@
   "support_closed": "✅ Ticket #{number} encerrado. Obrigado! Se precisar de algo, é só abrir outro em 💬 Suporte.",
   "support_closed_by_team": "✅ O ticket #{number} foi encerrado pela equipe de suporte. Se precisar, abra outro em 💬 Suporte.",
   "support_empty": "Envie um texto ou uma imagem.",
-  "support_too_long": "Mensagem muito longa. Divida em partes menores."
+  "support_too_long": "Mensagem muito longa. Divida em partes menores.",
+  "notify_me": "🔔 Avise-me quando chegar",
+  "notify_me_on": "✅ Aviso ativado (toque para cancelar)",
+  "notify_me_subscribed": "🔔 Pronto! Vamos te avisar quando o produto voltar ao estoque.",
+  "notify_me_cancelled": "Aviso de estoque cancelado.",
+  "sold_out_tag": "esgotado",
+  "restock_notice": "🔔 <b>{name}</b> voltou ao estoque! Garanta o seu antes que acabe.",
+  "restock_view_product": "🛒 Ver produto"
 }

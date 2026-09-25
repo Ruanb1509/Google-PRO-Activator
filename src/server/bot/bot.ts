@@ -15,6 +15,7 @@ import { getSettings } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, DepositError, type DepositErrorCode } from "@/server/wallet/deposit.service";
 import { getOpenTicket } from "@/server/support/support.service";
+import { hasStockAlert, toggleStockAlert } from "@/server/inventory/stock-alerts.service";
 import { handleSupportMessage, registerSupportHandlers, showSupport, type SupportState } from "@/server/bot/support.handlers";
 
 /** Context enriched with the stored customer. The bot is only an interface: logic lives in services. */
@@ -64,11 +65,14 @@ async function showMenu(ctx: StoreContext, opts: { banner?: boolean } = {}) {
 }
 
 async function showProducts(ctx: StoreContext) {
-  const products = (await listProducts()).filter((p) => p.stock.available > 0);
+  // Sold-out products stay listed (tagged) so customers can ask to be notified when they are back.
+  const products = await listProducts();
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
   const kb = new InlineKeyboard();
   for (const p of products) {
-    kb.text(`${localizedName(p, ctx.locale)} · ${formatMoney(p.priceBrlCents, "BRL", ctx.locale)} / ${formatMoney(p.priceUsdCents, "USD", ctx.locale)}`, `p:${p.id}`).row();
+    const price = `${formatMoney(p.priceBrlCents, "BRL", ctx.locale)} / ${formatMoney(p.priceUsdCents, "USD", ctx.locale)}`;
+    const label = p.stock.available > 0 ? `${localizedName(p, ctx.locale)} · ${price}` : `${localizedName(p, ctx.locale)} · ${ctx.tr("sold_out_tag")}`;
+    kb.text(label, `p:${p.id}`).row();
   }
   await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: kb });
 }
@@ -84,7 +88,10 @@ async function showProduct(ctx: StoreContext, productId: string) {
     priceUsd: formatMoney(product.priceUsdCents, "USD", ctx.locale),
     stock: stock > 0 ? String(stock) : "0",
   });
-  if (stock <= 0) return ctx.reply(`${text}\n\n${ctx.tr("out_of_stock")}`, { parse_mode: "HTML" });
+  if (stock <= 0) {
+    const subscribed = await hasStockAlert(ctx.user.id, product.id);
+    return ctx.reply(`${text}\n\n${ctx.tr("out_of_stock")}`, { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, product.id, subscribed) });
+  }
 
   const methods = await availablePaymentMethods(ctx.locale);
   if (!methods.length) return ctx.reply(`${text}\n\n${ctx.tr("no_payment_methods")}`, { parse_mode: "HTML" });
@@ -107,6 +114,10 @@ async function showProduct(ctx: StoreContext, productId: string) {
     }
   }
   await ctx.reply(body, { parse_mode: "HTML", reply_markup: kb });
+}
+
+function stockAlertKeyboard(ctx: StoreContext, productId: string, subscribed: boolean) {
+  return new InlineKeyboard().text(ctx.tr(subscribed ? "notify_me_on" : "notify_me"), `ntf:${productId}`).row().text(ctx.tr("back"), "menu:buy");
 }
 
 async function startCheckout(ctx: StoreContext, productId: string, methodKey: string) {
@@ -149,7 +160,7 @@ async function startCheckout(ctx: StoreContext, productId: string, methodKey: st
       );
     }
     if (err instanceof AppError) {
-      if (err.code === "OUT_OF_STOCK") return ctx.reply(ctx.tr("out_of_stock"));
+      if (err.code === "OUT_OF_STOCK") return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, productId, await hasStockAlert(ctx.user.id, productId)) });
       if (err.code === "TOO_MANY_PENDING") return ctx.reply(ctx.tr("too_many_pending"));
       if (err.code === "RATE_LIMITED") return ctx.reply(ctx.tr("too_many_requests"));
       if (err.code === "PAYMENT_PROVIDER_ERROR" || err.code === "METHOD_UNAVAILABLE") return ctx.reply(ctx.tr("payment_error"));
@@ -385,6 +396,12 @@ export function createBot(): Bot<StoreContext> {
   bot.callbackQuery(/^p:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     await showProduct(ctx, ctx.match[1]!);
+  });
+  bot.callbackQuery(/^ntf:(\w+)$/, async (ctx) => {
+    const productId = ctx.match[1]!;
+    const on = await toggleStockAlert(ctx.user.id, productId);
+    await ctx.answerCallbackQuery({ text: ctx.tr(on ? "notify_me_subscribed" : "notify_me_cancelled") });
+    await ctx.editMessageReplyMarkup({ reply_markup: stockAlertKeyboard(ctx, productId, on) }).catch(() => undefined);
   });
   bot.callbackQuery(/^pay:(\w+):([a-z0-9_]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
