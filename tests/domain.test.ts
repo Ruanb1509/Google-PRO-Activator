@@ -24,8 +24,10 @@ describe("inventory parser", () => {
   });
 
   it("masks values", () => {
-    expect(maskValue("https://example.com/invite/ABCDEFGH")).toBe("https:…EFGH");
-    expect(maskValue("ABC")).toBe("AB•");
+    expect(maskValue("https://example.com/invite/ABCDEFGH")).toBe("https://example.com••••EFGH");
+    expect(maskValue("ABCD-EFGH-IJKL")).toBe("••••JKL");
+    expect(maskValue("ABC")).toBe("••••");
+    expect(maskValue("ABCDEFGHIJ")).toBe("••••IJ"); // 10-char code: only 2 chars visible
   });
 });
 

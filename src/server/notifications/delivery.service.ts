@@ -46,8 +46,8 @@ export async function deliverOrder(orderId: string, opts: { resend?: boolean; ad
       number: order.number,
     });
     await sendHtml(order.user.telegramId, html);
-    await db().order.update({
-      where: { id: orderId },
+    await db().order.updateMany({
+      where: { id: orderId, status: { in: ["PAID", "DELIVERED"] } },
       data: { status: "DELIVERED", deliveredAt: order.deliveredAt ?? new Date(), deliveryError: null, deliveryLockedUntil: null },
     });
     await orderEvent({ orderId, type: opts.resend ? "DELIVERY_RESENT" : "DELIVERED", actorType: opts.adminId ? "ADMIN" : "SYSTEM", adminId: opts.adminId });

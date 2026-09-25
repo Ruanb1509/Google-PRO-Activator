@@ -149,7 +149,7 @@ export async function verifyDeposit(user: User, rawTxId: string): Promise<{ cred
         where: { id: deposit.id, status: "PENDING" },
         data: {
           status: "CONFIRMED",
-          providerTxId: txId,
+          providerTxId: String(tx.transactionId),
           creditedCents: credited,
           payerId: tx.payerInfo?.binanceId != null ? String(tx.payerInfo.binanceId) : null,
           rawTransaction: tx as unknown as Prisma.InputJsonValue,
@@ -157,8 +157,8 @@ export async function verifyDeposit(user: User, rawTxId: string): Promise<{ cred
         },
       });
       if (upd.count === 0) throw new DepositError("NO_PENDING");
-      const moved = await moveBalance(dbTx, { userId: user.id, amountCents: credited, type: "DEPOSIT", depositId: deposit.id, note: `Binance Pay ${txId}` });
-      await audit({ actorType: "BOT", action: AuditActions.DEPOSIT_CONFIRMED, resourceType: "deposit", resourceId: deposit.id, details: { txId, credited, asset: deposit.asset, userId: user.id } }, dbTx);
+      const moved = await moveBalance(dbTx, { userId: user.id, amountCents: credited, type: "DEPOSIT", depositId: deposit.id, note: `Binance Pay ${tx.transactionId}` });
+      await audit({ actorType: "BOT", action: AuditActions.DEPOSIT_CONFIRMED, resourceType: "deposit", resourceId: deposit.id, details: { txId: String(tx.transactionId), typed: txId, credited, asset: deposit.asset, userId: user.id } }, dbTx);
       return moved;
     });
     return { creditedCents: credited, balanceAfterCents: result.balanceAfterCents, asset: deposit.asset };
@@ -167,6 +167,10 @@ export async function verifyDeposit(user: User, rawTxId: string): Promise<{ cred
     throw err;
   }
 }
+
+// Deposits are always keyed by Binance's own transactionId, never by the id the customer typed:
+// the lookup also matches a transfer's orderId, so keying by the typed string would let the same
+// transfer be claimed twice (once per identifier).
 
 /**
  * Open-amount top-up (default mode): the customer sends ANY amount to the store's Binance Pay ID and
@@ -214,7 +218,7 @@ export async function claimTransaction(user: User, rawTxId: string): Promise<{ c
           expectedCents: credited,
           creditedCents: credited,
           asset: tx.currency,
-          providerTxId: txId,
+          providerTxId: String(tx.transactionId),
           payerId: tx.payerInfo?.binanceId != null ? String(tx.payerInfo.binanceId) : null,
           rawTransaction: tx as unknown as Prisma.InputJsonValue,
           attempts: 1,
@@ -222,8 +226,8 @@ export async function claimTransaction(user: User, rawTxId: string): Promise<{ c
           confirmedAt: new Date(),
         },
       });
-      const moved = await moveBalance(dbTx, { userId: user.id, amountCents: credited, type: "DEPOSIT", depositId: deposit.id, note: `Binance Pay ${txId}` });
-      await audit({ actorType: "BOT", action: AuditActions.DEPOSIT_CONFIRMED, resourceType: "deposit", resourceId: deposit.id, details: { txId, credited, asset: tx.currency, userId: user.id, mode: "open_amount" } }, dbTx);
+      const moved = await moveBalance(dbTx, { userId: user.id, amountCents: credited, type: "DEPOSIT", depositId: deposit.id, note: `Binance Pay ${tx.transactionId}` });
+      await audit({ actorType: "BOT", action: AuditActions.DEPOSIT_CONFIRMED, resourceType: "deposit", resourceId: deposit.id, details: { txId: String(tx.transactionId), typed: txId, credited, asset: tx.currency, userId: user.id, mode: "open_amount" } }, dbTx);
       return { creditedCents: credited, balanceAfterCents: moved.balanceAfterCents, asset: tx.currency };
     });
   } catch (err) {

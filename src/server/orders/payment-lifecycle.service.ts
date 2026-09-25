@@ -43,8 +43,9 @@ export async function applyPaymentStatus(paymentId: string, result: PaymentStatu
         if (["PAID", "DELIVERED", "REFUNDED"].includes(order.status)) return { kind: "noop" };
 
         // Never deliver if the provider charged a different amount/currency than the order.
-        const amountMismatch = result.amountCents !== undefined && result.amountCents !== order.amountCents;
-        const currencyMismatch = result.currency !== undefined && result.currency.toUpperCase() !== order.currency;
+        // A provider answer without amount/currency is treated as a mismatch (fail closed).
+        const amountMismatch = result.amountCents == null || result.amountCents !== order.amountCents;
+        const currencyMismatch = result.currency == null || result.currency.toUpperCase() !== order.currency;
         if (amountMismatch || currencyMismatch) {
           await tx.payment.update({ where: { id: payment.id }, data: { metadata: { ...((payment.metadata as object) ?? {}), mismatch: { amount: result.amountCents ?? null, currency: result.currency ?? null } } } });
           await orderEvent({ orderId: order.id, type: "AMOUNT_MISMATCH", actorType: actor.actorType, details: { expected: { amount: order.amountCents, currency: order.currency }, got: { amount: result.amountCents ?? null, currency: result.currency ?? null } } }, tx);
@@ -82,7 +83,7 @@ export async function applyPaymentStatus(paymentId: string, result: PaymentStatu
 
       case "REFUNDED": {
         if (payment.status === "REFUNDED" && order.status === "REFUNDED") return { kind: "noop" };
-        await markRefunded(tx, { orderId: order.id, paymentId: payment.id, delivered: Boolean(order.deliveredAt), actor });
+        await markRefunded(tx, { orderId: order.id, paymentId: payment.id, delivered: itemMayHaveBeenSeen(order), actor });
         return { kind: "refunded", orderId: order.id };
       }
     }
@@ -90,6 +91,14 @@ export async function applyPaymentStatus(paymentId: string, result: PaymentStatu
 
   await afterCommit(outcome);
   return outcome;
+}
+
+/**
+ * True when the customer may already have the item: delivered, or a delivery was attempted (the
+ * message may have been sent before a crash/failure). Such items must never be resold.
+ */
+export function itemMayHaveBeenSeen(order: { deliveredAt: Date | null; deliveryAttempts: number }): boolean {
+  return order.deliveredAt !== null || order.deliveryAttempts > 0;
 }
 
 /** Refund bookkeeping: the item goes back to stock ONLY if it was never delivered to the customer. */

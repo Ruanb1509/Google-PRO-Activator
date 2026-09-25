@@ -34,11 +34,11 @@ export function parseInventoryText(text: string, opts: { csv?: boolean } = {}): 
     if (!value) return; // blank lines are ignored
     if (opts.csv && idx === 0 && /^(value|code|link|codigo|código|item)s?$/i.test(value)) return; // header
     if (value.length > MAX_ITEM_LENGTH) {
-      out.invalid.push({ line: idx + 1, value: value.slice(0, 40) + "…", reason: "too_long" });
+      out.invalid.push({ line: idx + 1, value: maskValue(value), reason: "too_long" });
       return;
     }
     if (CONTROL.test(value)) {
-      out.invalid.push({ line: idx + 1, value: value.slice(0, 40), reason: "control_characters" });
+      out.invalid.push({ line: idx + 1, value: maskValue(value), reason: "control_characters" });
       return;
     }
     if (seen.has(value)) {
@@ -52,7 +52,18 @@ export function parseInventoryText(text: string, opts: { csv?: boolean } = {}): 
 }
 
 /** Masks a value for listings: keeps a short prefix/suffix only. */
+/**
+ * Preview shown in listings (no audit): reveals at most 25% of the secret part and never more than 4
+ * characters, so a preview can never be used or brute-forced. For links only the host is kept.
+ */
 export function maskValue(value: string): string {
-  if (value.length <= 8) return value.slice(0, 2) + "•".repeat(Math.max(value.length - 2, 1));
-  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+  let prefix = "";
+  let secret = value;
+  const url = /^(https?:\/\/[^/?#\s]+)(.*)$/i.exec(value);
+  if (url && url[2]!.length > 0) {
+    prefix = url[1]!;
+    secret = url[2]!;
+  }
+  const visible = Math.min(4, Math.floor(secret.length * 0.25));
+  return `${prefix}••••${visible > 0 ? secret.slice(-visible) : ""}`;
 }

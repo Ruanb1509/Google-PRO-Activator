@@ -87,8 +87,12 @@ export async function createOrder(user: User, productId: string, methodKey: stri
     };
   }
 
-  const pending = await db().order.count({ where: { userId: user.id, status: "PENDING", expiresAt: { gt: new Date() } } });
-  if (pending >= settings.maxPendingOrdersPerUser) throw new AppError("TOO_MANY_PENDING", "Too many pending orders", 409);
+  const assertPendingLimit = async (tx: Prisma.TransactionClient) => {
+    // Counts every order that may still hold a reservation (expiry + grace), not just unexpired ones.
+    const pending = await tx.order.count({ where: { userId: user.id, status: "PENDING", expiresAt: { gt: new Date(Date.now() - RESERVATION_GRACE_MS) } } });
+    if (pending >= settings.maxPendingOrdersPerUser) throw new AppError("TOO_MANY_PENDING", "Too many pending orders", 409);
+  };
+  await assertPendingLimit(db());
 
   const currency = method.currency;
   const amountCents = currency === "BRL" ? product.priceBrlCents : product.priceUsdCents;
@@ -100,6 +104,9 @@ export async function createOrder(user: User, productId: string, methodKey: stri
 
   // 1) Order + temporary stock reservation, atomically.
   const order = await db().$transaction(async (tx) => {
+    // Serialises concurrent checkouts of the same user so the pending-order limit cannot be raced.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order:create:${user.id}`}))`;
+    await assertPendingLimit(tx);
     const o = await tx.order.create({
       data: { userId: user.id, productId, productName, status: "PENDING", currency, amountCents, paymentMethod: method.key, locale, expiresAt },
     });
@@ -223,6 +230,11 @@ export async function getUserOrder(userId: string, orderId: string) {
   const order = await db().order.findFirst({ where: { id: orderId, userId }, include: { inventoryItem: true, payment: true } });
   if (!order) return null;
   const canSeeItem = ["PAID", "DELIVERED"].includes(order.status) && order.inventoryItem?.status === "SOLD";
+  if (canSeeItem && !order.deliveredAt) {
+    // The customer is about to see the item: it counts as delivered (so a later refund never returns it to stock).
+    await db().order.updateMany({ where: { id: order.id, status: "PAID" }, data: { status: "DELIVERED", deliveredAt: new Date(), deliveryError: null } });
+    await orderEvent({ orderId: order.id, type: "DELIVERED", actorType: "BOT", message: "Item shown in the customer's order view" });
+  }
   return { order, item: canSeeItem && order.inventoryItem ? decrypt(order.inventoryItem.valueEncrypted) : null };
 }
 
