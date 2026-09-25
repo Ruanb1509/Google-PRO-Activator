@@ -176,22 +176,40 @@ export async function syncOrderPayment(orderId: string, actor: { actorType: "BOT
 export async function cancelOrderByUser(userId: string, orderId: string): Promise<{ number: number } | null> {
   const order = await db().order.findFirst({ where: { id: orderId, userId }, include: { payment: true } });
   if (!order || order.status !== "PENDING") return null;
+  return (await cancelPendingOrder(order, { actorType: "BOT" }, "cancelled_by_user")) ? { number: order.number } : null;
+}
+
+/** Admin cancellation of an unpaid order: cancels the charge at the provider and puts the reserved item back in stock. */
+export async function cancelOrderByAdmin(orderId: string, adminId: string, ip: string | null): Promise<void> {
+  const order = await db().order.findUnique({ where: { id: orderId }, include: { payment: true } });
+  if (!order) throw Errors.notFound("Order");
+  if (order.status !== "PENDING") throw Errors.conflict("Só pedidos pendentes podem ser cancelados");
+  if (!(await cancelPendingOrder(order, { actorType: "ADMIN", adminId }, "cancelled_by_admin"))) {
+    throw Errors.conflict("O pedido foi pago ou alterado enquanto era cancelado; verifique o status");
+  }
+  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.ORDER_UPDATED, resourceType: "order", resourceId: orderId, details: { action: "cancel" } });
+}
+
+async function cancelPendingOrder(
+  order: { id: string; payment: { provider: string; providerPaymentId: string | null } | null },
+  actor: { actorType: "BOT" | "ADMIN"; adminId?: string },
+  reason: string,
+): Promise<boolean> {
   // First make sure it was not paid in the meantime.
-  const status = await syncOrderPayment(order.id, { actorType: "BOT" }).catch(() => null);
-  if (status && status !== "PENDING") return null;
+  const status = await syncOrderPayment(order.id, actor).catch(() => null);
+  if (status && status !== "PENDING") return false;
   if (order.payment?.providerPaymentId) {
     const provider = getProvider(order.payment.provider);
-    await provider.cancelPayment?.(order.payment.providerPaymentId).catch((err) => logger.warn("order.cancel_at_provider_failed", { err, orderId }));
+    await provider.cancelPayment?.(order.payment.providerPaymentId).catch((err) => logger.warn("order.cancel_at_provider_failed", { err, orderId: order.id }));
   }
-  const updated = await db().$transaction(async (tx) => {
+  return db().$transaction(async (tx) => {
     const res = await tx.order.updateMany({ where: { id: order.id, status: "PENDING" }, data: { status: "CANCELLED" } });
     if (res.count === 0) return false;
     await tx.payment.updateMany({ where: { orderId: order.id, status: "PENDING" }, data: { status: "CANCELLED" } });
-    await releaseReservation(tx, order.id, "cancelled_by_user");
-    await orderEvent({ orderId: order.id, type: "CANCELLED", actorType: "BOT" }, tx);
+    await releaseReservation(tx, order.id, reason);
+    await orderEvent({ orderId: order.id, type: "CANCELLED", ...actor }, tx);
     return true;
   });
-  return updated ? { number: order.number } : null;
 }
 
 // ───────────────────────── Queries ─────────────────────────

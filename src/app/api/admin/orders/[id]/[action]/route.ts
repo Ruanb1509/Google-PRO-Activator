@@ -2,7 +2,7 @@ import { adminRoute, json } from "@/server/common/http";
 import { Errors } from "@/server/common/errors";
 import { hasRole } from "@/server/auth/roles";
 import { audit, AuditActions } from "@/server/audit/audit.service";
-import { fulfillOutOfStockOrder, getOrderDetail, refundOrder, resendDelivery, syncOrderPayment } from "@/server/orders/orders.service";
+import { cancelOrderByAdmin, fulfillOutOfStockOrder, getOrderDetail, refundOrder, resendDelivery, syncOrderPayment } from "@/server/orders/orders.service";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -12,6 +12,7 @@ export const maxDuration = 60;
  * POST /api/admin/orders/:id/resend   (STAFF)  re-send the delivery message
  * POST /api/admin/orders/:id/sync     (STAFF)  re-check the payment status at the provider
  * POST /api/admin/orders/:id/fulfill  (STAFF)  assign stock to a paid order that had none
+ * POST /api/admin/orders/:id/cancel   (STAFF)  cancel an unpaid order and release its reserved item
  */
 export const POST = adminRoute("STAFF", async ({ params, admin, ip }) => {
   const id = params.id!;
@@ -31,6 +32,9 @@ export const POST = adminRoute("STAFF", async ({ params, admin, ip }) => {
     }
     case "fulfill":
       await fulfillOutOfStockOrder(id, admin.id, ip);
+      break;
+    case "cancel":
+      await cancelOrderByAdmin(id, admin.id, ip);
       break;
     default:
       throw Errors.notFound("Action");

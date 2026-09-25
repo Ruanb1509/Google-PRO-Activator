@@ -54,8 +54,9 @@ export default function OrderDetailPage() {
   const isAdmin = useCan("ADMIN");
   const action = useAction();
 
-  async function run(kind: "sync" | "resend" | "fulfill" | "refund", success: string) {
+  async function run(kind: "sync" | "resend" | "fulfill" | "refund" | "cancel", success: string) {
     if (kind === "refund" && !confirm("Reembolsar este pedido pelo gateway de pagamento? O item entregue NÃO volta ao estoque.")) return;
+    if (kind === "cancel" && !confirm("Cancelar este pedido? A cobrança é cancelada no provedor e o item reservado volta a ficar disponível.")) return;
     const r = await action.run(kind, () => api<{ order: OrderDetail }>(`/api/admin/orders/${id}/${kind}`, { method: "POST" }), success);
     if (r?.order) setData(r.order);
     else await reload();
@@ -94,6 +95,11 @@ export default function OrderDetailPage() {
           {data.status === "PAID" && !data.inventoryItem && (
             <Button variant="primary" onClick={() => run("fulfill", "Item atribuído e entregue.")} loading={action.busy === "fulfill"}>
               📦 Atribuir estoque e entregar
+            </Button>
+          )}
+          {data.status === "PENDING" && (
+            <Button variant="danger" onClick={() => run("cancel", "Pedido cancelado e item liberado no estoque.")} loading={action.busy === "cancel"}>
+              ✖️ Cancelar e liberar estoque
             </Button>
           )}
           {isAdmin && paidLike && (

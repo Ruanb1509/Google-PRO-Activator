@@ -89,6 +89,13 @@ export default function InventoryPage() {
     await list.reload();
   }
 
+  async function releaseReserved(i: Item) {
+    if (!i.orderId || !confirm(`Cancelar o pedido #${i.order?.number ?? ""} e deixar este item disponível? A cobrança pendente é cancelada no provedor.`)) return;
+    const r = await action.run(i.id, () => api(`/api/admin/orders/${i.orderId}/cancel`, { method: "POST" }));
+    if (r) action.setMessage(`Pedido #${i.order?.number ?? ""} cancelado; item disponível novamente.`);
+    await list.reload();
+  }
+
   async function removeSelected() {
     const ids = [...selected];
     if (!ids.length || !confirm(`Remover ${ids.length} item(ns) do estoque? Esta ação não pode ser desfeita.`)) return;
@@ -234,6 +241,11 @@ export default function InventoryPage() {
                           {i.status === "AVAILABLE" && (
                             <Button size="sm" onClick={() => setItemStatus(i.id, "INVALID")} loading={action.busy === i.id}>
                               Marcar inválido
+                            </Button>
+                          )}
+                          {i.status === "RESERVED" && i.orderId && (
+                            <Button size="sm" onClick={() => releaseReserved(i)} loading={action.busy === i.id}>
+                              Liberar
                             </Button>
                           )}
                           {(i.status === "INVALID" || i.status === "CANCELLED") && (
