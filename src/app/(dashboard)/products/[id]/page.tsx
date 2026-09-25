@@ -7,6 +7,7 @@ import type { ProductDetail } from "@/lib/types";
 import { useAction, useApi } from "@/components/use-api";
 import { useCan } from "@/components/admin-context";
 import { ProductForm } from "@/components/product-form";
+import { ProductLogo } from "@/components/logo-picker";
 import { Badge, Button, Card, ErrorBox, LinkButton, Loading, Notice, PageHeader, Stat } from "@/components/ui";
 
 interface AddResult {
@@ -35,7 +36,12 @@ export default function ProductDetailPage() {
   return (
     <>
       <PageHeader
-        title={data.name}
+        title={
+          <span className="flex items-center gap-3">
+            <ProductLogo url={data.logoUrl} name={data.name} size={40} />
+            {data.name}
+          </span>
+        }
         subtitle={
           <span className="flex flex-wrap items-center gap-2">
             🇧🇷 {fmtBRL(data.priceBrlCents)} · 🌎 {fmtUSD(data.priceUsdCents)}

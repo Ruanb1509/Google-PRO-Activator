@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { centsToInput, toCents } from "@/lib/api";
 import type { Product } from "@/lib/types";
 import { Button, ErrorBox, Field } from "@/components/ui";
+import { LogoPicker, type LogoValue } from "@/components/logo-picker";
 
 export interface ProductPayload {
   name: string;
@@ -16,6 +17,9 @@ export interface ProductPayload {
   isActive: boolean;
   lowStockThreshold: number | null;
   sortOrder: number;
+  logoKey?: string | null;
+  /** Omitted = keep the uploaded image as is. */
+  logoImage?: string | null;
 }
 
 export function ProductForm({
@@ -39,6 +43,7 @@ export function ProductForm({
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
   const [threshold, setThreshold] = useState(initial?.lowStockThreshold != null ? String(initial.lowStockThreshold) : "");
   const [sortOrder, setSortOrder] = useState(String(initial?.sortOrder ?? 0));
+  const [logo, setLogo] = useState<LogoValue>({ logoKey: initial?.logoKey ?? null, logoImage: undefined });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -63,6 +68,8 @@ export function ProductForm({
         isActive,
         lowStockThreshold: threshold ? Number(threshold) : null,
         sortOrder: Number(sortOrder) || 0,
+        logoKey: logo.logoKey,
+        ...(logo.logoImage !== undefined ? { logoImage: logo.logoImage } : {}),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -75,6 +82,11 @@ export function ProductForm({
     <form onSubmit={submit} className="space-y-4">
       {error && <ErrorBox error={error} />}
       <fieldset disabled={readOnly} className="grid gap-4 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <span className="label">Logo do produto</span>
+          <LogoPicker value={logo} onChange={setLogo} currentUrl={initial?.hasCustomLogo ? initial.logoUrl : null} disabled={readOnly} />
+          <span className="mt-1 block text-xs text-muted">Aparece no painel e na foto do produto no bot.</span>
+        </div>
         <Field label="Nome (pt-BR)">
           <input className="input" required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>

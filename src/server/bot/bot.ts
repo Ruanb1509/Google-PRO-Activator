@@ -9,7 +9,7 @@ import { formatMoney, parseMoneyToCents } from "@/server/common/money";
 import { rateLimit } from "@/server/common/rate-limit";
 import { allTranslations, detectLocale, t, type MessageKey } from "@/i18n";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
-import { availableStock, listProducts, localizedDescription, localizedName } from "@/server/products/products.service";
+import { availableStock, listProducts, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
 import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, syncOrderPayment } from "@/server/orders/orders.service";
 import { getSettings } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
@@ -81,7 +81,18 @@ async function showProduct(ctx: StoreContext, productId: string) {
     kb.text(`${label} — ${formatMoney(price, m.currency, ctx.locale)}`, `pay:${product.id}:${m.key}`).row();
   }
   kb.text(ctx.tr("back"), "menu:buy");
-  await ctx.reply(`${text}\n\n${ctx.tr("choose_payment")}`, { parse_mode: "HTML", reply_markup: kb });
+  const body = `${text}\n\n${ctx.tr("choose_payment")}`;
+  const logo = productLogoUrl(product, true);
+  if (logo) {
+    try {
+      // Telegram photo captions are limited to 1024 characters.
+      if (body.length <= 1024) return await ctx.replyWithPhoto(logo, { caption: body, parse_mode: "HTML", reply_markup: kb });
+      await ctx.replyWithPhoto(logo);
+    } catch (err) {
+      logger.warn("bot.product_logo_failed", { err, productId: product.id }); // fall back to text only
+    }
+  }
+  await ctx.reply(body, { parse_mode: "HTML", reply_markup: kb });
 }
 
 async function startCheckout(ctx: StoreContext, productId: string, methodKey: string) {

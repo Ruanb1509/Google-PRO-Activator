@@ -7,6 +7,7 @@ import type { ProductWithStock } from "@/lib/types";
 import { useAction, useApi } from "@/components/use-api";
 import { useCan } from "@/components/admin-context";
 import { ProductForm } from "@/components/product-form";
+import { ProductLogo } from "@/components/logo-picker";
 import { Badge, Button, Empty, ErrorBox, LinkButton, Loading, Modal, PageHeader, Toggle } from "@/components/ui";
 
 export default function ProductsPage() {
@@ -39,11 +40,14 @@ export default function ProductsPage() {
           {data.items.map((p) => (
             <div key={p.id} className="flex flex-col rounded-xl border border-line bg-card p-4">
               <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <Link href={`/products/${p.id}`} className="block truncate font-semibold hover:underline">
-                    {p.name}
-                  </Link>
-                  {p.category && <div className="text-xs text-muted">{p.category}</div>}
+                <div className="flex min-w-0 items-center gap-3">
+                  <ProductLogo url={p.logoUrl} name={p.name} size={44} />
+                  <div className="min-w-0">
+                    <Link href={`/products/${p.id}`} className="block truncate font-semibold hover:underline">
+                      {p.name}
+                    </Link>
+                    {p.category && <div className="text-xs text-muted">{p.category}</div>}
+                  </div>
                 </div>
                 <Toggle checked={p.isActive} disabled={!canEdit || action.busy === p.id} onChange={(v) => toggle(p, v)} label="Ativo" />
               </div>

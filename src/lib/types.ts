@@ -18,6 +18,12 @@ export interface Product {
   isActive: boolean;
   lowStockThreshold: number | null;
   sortOrder: number;
+  /** Built-in gallery logo key (see src/lib/ai-logos.ts). */
+  logoKey: string | null;
+  /** True when an image was uploaded as logo. */
+  hasCustomLogo: boolean;
+  /** Public URL of the logo (gallery or uploaded), or null. */
+  logoUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -115,6 +115,8 @@ model Product {
   isActive          Boolean   @default(true) @map("is_active")
   lowStockThreshold Int?      @map("low_stock_threshold") /// overrides the global setting
   sortOrder         Int       @default(0) @map("sort_order")
+  logoKey           String?   @map("logo_key") /// logo from the built-in AI logo gallery
+  logoImage         String?   @map("logo_image") /// uploaded logo as a data URL (PNG/JPEG/WebP, <= 256x256)
   deletedAt         DateTime? @map("deleted_at") /// soft delete keeps order history intact
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
