@@ -3,11 +3,38 @@ type Level = "debug" | "info" | "warn" | "error";
 const order: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 const minLevel = (process.env.LOG_LEVEL as Level) || (process.env.NODE_ENV === "production" ? "info" : "debug");
 
+/**
+ * Only allowlisted error fields are logged: errors may carry request payloads (e.g. GrammyError.payload
+ * holds the sent message text, which can contain a delivered item) or full provider responses (PII).
+ */
+const SAFE_ERROR_FIELDS = ["code", "provider", "httpStatus", "method", "error_code", "description"] as const;
+
+function str(v: unknown): string | undefined {
+  return typeof v === "string" ? v.slice(0, 300) : undefined;
+}
+
+/** Keeps only the rejection reason of a provider response (Mercado Pago: message/cause; Stripe: error.type/code/message). */
+function summarizeProviderBody(body: unknown): unknown {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as Record<string, unknown>;
+  const nested = b.error && typeof b.error === "object" ? (b.error as Record<string, unknown>) : null;
+  const cause = Array.isArray(b.cause) ? b.cause.slice(0, 5).map((c) => ({ code: (c as Record<string, unknown>)?.code, description: str((c as Record<string, unknown>)?.description) })) : undefined;
+  return {
+    message: str(nested?.message) ?? str(b.message),
+    error: str(nested?.type) ?? str(b.error),
+    code: str(nested?.code) ?? str(b.code) ?? (typeof b.code === "number" ? b.code : undefined),
+    declineCode: str(nested?.decline_code),
+    cause,
+  };
+}
+
 function serializeError(err: unknown): unknown {
   if (err instanceof Error) {
-    // Keep extra fields such as ProviderError.httpStatus / body (the provider's reason for rejecting).
-    const { name, message, stack, ...extra } = err as Error & Record<string, unknown>;
-    return { ...extra, name, message, stack };
+    const e = err as Error & Record<string, unknown>;
+    const out: Record<string, unknown> = { name: e.name, message: e.message, stack: e.stack };
+    for (const k of SAFE_ERROR_FIELDS) if (e[k] !== undefined && typeof e[k] !== "object") out[k] = e[k];
+    if (e.body !== undefined) out.body = summarizeProviderBody(e.body);
+    return out;
   }
   return err;
 }
