@@ -32,9 +32,17 @@ export const storeSettingsSchema = z.object({
     minDepositCents: z.number().int().min(100),
     maxDepositCents: z.number().int().min(100),
     depositTtlMinutes: z.number().int().min(10).max(7 * 24 * 60),
-    /** Adds a unique cents offset so each deposit amount identifies its owner (strongly recommended). */
+    /**
+     * false (default): the customer sends ANY amount and then the transaction id; the amount read from
+     * the Binance API is credited. true: the customer picks an amount first and must send an exact,
+     * unique value (a stolen transaction id can't be claimed by someone else).
+     */
     requireExactAmount: z.boolean(),
     presetAmountsCents: z.array(z.number().int().min(100)).max(6),
+    /** USD stablecoins accepted 1:1 as store credit. */
+    acceptedAssets: z.array(z.string().regex(/^[A-Z0-9]{2,10}$/)).min(1).default(["USDT", "USDC", "FDUSD"]),
+    /** Open-amount mode: how old (hours) a transaction may be when its id is sent. */
+    claimWindowHours: z.number().int().min(1).max(24 * 30).default(24),
   }),
 });
 export type StoreSettings = z.infer<typeof storeSettingsSchema>;
@@ -57,8 +65,10 @@ export const DEFAULT_SETTINGS: StoreSettings = {
     minDepositCents: 200,
     maxDepositCents: 50000,
     depositTtlMinutes: 60,
-    requireExactAmount: true,
+    requireExactAmount: false,
     presetAmountsCents: [500, 1000, 2000, 5000],
+    acceptedAssets: ["USDT", "USDC", "FDUSD"],
+    claimWindowHours: 24,
   },
 };
 
@@ -69,7 +79,9 @@ const CACHE_MS = 15_000;
 export async function getSettings(): Promise<StoreSettings> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.value;
   const row = await db().setting.findUnique({ where: { key: KEY } });
-  const merged = { ...DEFAULT_SETTINGS, ...((row?.value as object | null) ?? {}) };
+  const stored = (row?.value as Partial<StoreSettings> | null) ?? {};
+  // Nested objects are merged too, so settings saved by older versions pick up new keys.
+  const merged = { ...DEFAULT_SETTINGS, ...stored, binancePay: { ...DEFAULT_SETTINGS.binancePay, ...(stored.binancePay ?? {}) } };
   const parsed = storeSettingsSchema.safeParse(merged);
   const value = parsed.success ? parsed.data : DEFAULT_SETTINGS;
   cache = { value, at: Date.now() };

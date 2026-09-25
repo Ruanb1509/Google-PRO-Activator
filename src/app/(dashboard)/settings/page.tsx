@@ -33,6 +33,8 @@ interface StoreSettings {
     depositTtlMinutes: number;
     requireExactAmount: boolean;
     presetAmountsCents: number[];
+    acceptedAssets: string[];
+    claimWindowHours: number;
   };
 }
 
@@ -53,6 +55,7 @@ export default function SettingsPage() {
   const [minDep, setMinDep] = useState("");
   const [maxDep, setMaxDep] = useState("");
   const [presets, setPresets] = useState("");
+  const [assets, setAssets] = useState("");
 
   useEffect(() => {
     if (!data) return;
@@ -61,6 +64,7 @@ export default function SettingsPage() {
     setMinDep(centsToInput(data.settings.binancePay.minDepositCents));
     setMaxDep(centsToInput(data.settings.binancePay.maxDepositCents));
     setPresets(data.settings.binancePay.presetAmountsCents.map((c) => (c / 100).toString()).join(", "));
+    setAssets(data.settings.binancePay.acceptedAssets.join(", "));
   }, [data]);
 
   if (loading && !data) return <Loading />;
@@ -82,13 +86,18 @@ export default function SettingsPage() {
       .map(toCents);
     if (!min || !max || min > max) return action.setError("Valores mínimo/máximo de depósito inválidos.");
     if (presetCents.some((c) => !c)) return action.setError("Valores rápidos de depósito inválidos.");
+    const acceptedAssets = assets
+      .split(/[,;\s]+/)
+      .map((a) => a.trim().toUpperCase())
+      .filter(Boolean);
+    if (!acceptedAssets.length) return action.setError("Informe ao menos uma moeda aceita.");
     const body: StoreSettings = {
       ...s,
       brlCountries: countries
         .split(/[,;\s]+/)
         .map((c) => c.trim().toUpperCase())
         .filter((c) => c.length === 2),
-      binancePay: { ...s.binancePay, minDepositCents: min, maxDepositCents: max, presetAmountsCents: presetCents as number[] },
+      binancePay: { ...s.binancePay, minDepositCents: min, maxDepositCents: max, presetAmountsCents: presetCents as number[], acceptedAssets },
     };
     const r = await action.run("save", () => api<{ settings: StoreSettings }>("/api/admin/settings", { method: "PUT", body }), "Configurações salvas.");
     if (r) await reload();
@@ -240,7 +249,13 @@ export default function SettingsPage() {
               {!data.integrations.binancePay.configured && <Badge tone="warn">API não configurada</Badge>}
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="Ativo (moeda)">
+              <Field label="Moedas aceitas (1:1 com US$)" hint="Modo valor livre. Ex.: USDT, USDC, FDUSD">
+                <input className="input font-mono" value={assets} onChange={(e) => setAssets(e.target.value)} />
+              </Field>
+              <Field label="Janela para informar o ID (horas)" hint="Modo valor livre: idade máxima da transação">
+                <input className="input" type="number" min={1} value={s.binancePay.claimWindowHours} onChange={(e) => updateBp({ claimWindowHours: Number(e.target.value) })} />
+              </Field>
+              <Field label="Ativo do modo valor exato">
                 <input className="input font-mono" value={s.binancePay.asset} onChange={(e) => updateBp({ asset: e.target.value.toUpperCase().replace(/[^A-Z]/g, "") })} />
               </Field>
               <Field label="Depósito mínimo">
@@ -259,10 +274,13 @@ export default function SettingsPage() {
             <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" className="mt-1" checked={s.binancePay.requireExactAmount} onChange={(e) => updateBp({ requireExactAmount: e.target.checked })} />
               <span>
-                Exigir valor exato com centavos únicos <span className="text-muted">(recomendado)</span>
+                Exigir valor exato com centavos únicos <span className="text-muted">(modo valor exato)</span>
                 <span className="mt-0.5 block text-xs text-muted">
-                  Cada depósito recebe um valor único (ex.: 10,37 USDT). Assim, mesmo que alguém descubra o ID de uma transação de outra pessoa, não conseguirá usá-la, porque o valor não
-                  corresponderá ao depósito dela. Desativar permite que qualquer transação recebida seja reivindicada por quem informar o ID primeiro.
+                  <b>Desligado (padrão):</b> o cliente envia qualquer valor e depois o ID; o valor lido na API da Binance é creditado. Cada ID só pode ser usado uma vez e precisa ser uma
+                  transação recebida, recente e em moeda aceita — mas quem informar o ID primeiro fica com o crédito.
+                  <br />
+                  <b>Ligado:</b> o cliente escolhe o valor antes e envia um valor único (ex.: 10,37 USDT), então um ID descoberto por terceiros não pode ser usado por outra pessoa.
+                  Os campos de mínimo, máximo, validade e valores rápidos valem só para este modo.
                 </span>
               </span>
             </label>

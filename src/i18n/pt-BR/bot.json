@@ -2,7 +2,6 @@
   "lang_prompt": "🌐 Escolha seu idioma / Choose your language:",
   "lang_set": "✅ Idioma alterado para Português.",
   "welcome": "Olá, {name}! 👋\n\nBem-vindo(a) à nossa loja. Use o menu abaixo para comprar ou consultar seus pedidos.",
-
   "menu_buy": "🛒 Comprar",
   "menu_orders": "📦 Meus pedidos",
   "menu_prices": "💰 Preços",
@@ -10,7 +9,6 @@
   "menu_help": "❓ Ajuda",
   "menu_language": "🌐 Alterar idioma",
   "menu_placeholder": "Escolha uma opção",
-
   "back": "⬅️ Voltar",
   "buy": "Comprar",
   "choose_product": "🛒 <b>Escolha um produto:</b>",
@@ -19,7 +17,6 @@
   "out_of_stock": "😕 Produto sem estoque no momento.",
   "choose_payment": "💳 <b>Escolha a forma de pagamento:</b>",
   "no_payment_methods": "Nenhuma forma de pagamento está disponível agora. Tente novamente mais tarde.",
-
   "order_created": "🧾 <b>Pedido #{number}</b>\nProduto: {product}\nValor: <b>{amount}</b>\n\n⏳ Expira em {minutes} minutos.",
   "pix_instructions": "📲 <b>Pague com PIX</b>\n\nEscaneie o QR Code ou use o código <i>copia e cola</i> abaixo:\n\n<code>{code}</code>\n\nA confirmação é automática — assim que o banco confirmar, você recebe seu produto aqui.",
   "checkout_instructions": "🔐 Toque no botão abaixo para pagar com segurança. A confirmação é automática — você receberá seu produto aqui.",
@@ -32,17 +29,14 @@
   "order_not_pending": "O pedido #{number} está com status: {status}.",
   "too_many_pending": "Você já tem pedidos pendentes. Conclua ou cancele um deles antes de criar outro.",
   "insufficient_balance": "Saldo insuficiente. Seu saldo: {balance}. Valor do produto: {price}.",
-
   "payment_confirmed": "✅ <b>Pagamento confirmado!</b>\n\nSeu pedido foi processado.\n\n<b>Produto:</b>\n{product}\n\n<b>Seu acesso:</b>\n<code>{item}</code>\n\n<b>Pedido:</b>\n#{number}\n\nObrigado pela compra.",
   "paid_out_of_stock": "✅ Pagamento do pedido #{number} confirmado, mas o estoque acabou antes da entrega. Nossa equipe já foi avisada e resolverá (entrega ou reembolso) o quanto antes.",
   "order_refunded": "↩️ O pedido #{number} foi reembolsado.",
-
   "orders_empty": "Você ainda não tem pedidos.",
   "orders_title": "📦 <b>Seus últimos pedidos:</b>",
   "order_button": "#{number} · {product} · {status}",
   "order_details": "🧾 <b>Pedido #{number}</b>\nProduto: {product}\nValor: {amount}\nPagamento: {method}\nStatus: <b>{status}</b>\nData: {date}",
   "order_access": "\n\n<b>Seu acesso:</b>\n<code>{item}</code>",
-
   "status_PENDING": "⏳ Pendente",
   "status_PAID": "💰 Pago",
   "status_DELIVERED": "✅ Entregue",
@@ -50,12 +44,10 @@
   "status_EXPIRED": "⌛ Expirado",
   "status_REFUNDED": "↩️ Reembolsado",
   "status_CANCELLED": "✖️ Cancelado",
-
   "prices_title": "💰 <b>Tabela de preços</b>",
   "price_line": "• <b>{name}</b>\n   🇧🇷 {priceBrl}  |  🌎 {priceUsd}",
   "help_text": "❓ <b>Ajuda</b>\n\n1. Toque em <b>🛒 Comprar</b> e escolha o produto.\n2. Escolha a forma de pagamento (PIX, cartão ou saldo).\n3. Pague — a confirmação é automática.\n4. O produto é entregue aqui no chat e fica salvo em <b>📦 Meus pedidos</b>.\n\n⚠️ Nunca enviamos o produto antes da confirmação do pagamento pelo provedor.",
   "help_support": "\n\n📞 Suporte: {contact}",
-
   "balance_info": "👛 <b>Seu saldo:</b> {balance}\n\nVocê pode usar o saldo para comprar qualquer produto (preço em US$).",
   "deposit_button": "➕ Adicionar saldo (Binance Pay)",
   "deposit_disabled": "Depósitos via Binance Pay estão indisponíveis no momento.",
@@ -64,6 +56,8 @@
   "deposit_custom_prompt": "Digite o valor desejado em {asset} (mín. {min}, máx. {max}). Ex.: 15",
   "deposit_invalid_amount": "Valor inválido. Informe um valor entre {min} e {max}.",
   "deposit_instructions": "🟡 <b>Depósito via Binance Pay</b>\n\n1. No app da Binance, abra <b>Pay → Enviar</b>.\n2. Envie <b>exatamente</b> <code>{amount}</code> <b>{asset}</b> para o Binance Pay ID:\n<code>{payId}</code>\n3. Depois de enviar, toque em <b>“Já paguei”</b> e informe o <b>ID do pedido</b> (Order ID) da transferência.\n\n⚠️ O valor precisa ser exato (incluindo os centavos) para identificarmos seu depósito.\n⏳ Válido até {expires}.",
+  "deposit_open_instructions": "🟡 <b>Adicionar saldo via Binance Pay</b>\n\n1. No app da Binance, abra <b>Pay → Enviar</b>.\n2. Envie o valor que quiser em <b>{assets}</b> para o Binance Pay ID:\n<code>{payId}</code>\n3. Depois de enviar, toque em <b>“Já paguei”</b> e informe o <b>ID do pedido</b> (Order ID) da transferência.\n\n✅ O valor recebido é identificado automaticamente e creditado no seu saldo (1 USDT = US$ 1,00).\n⏳ Envie o ID em até {hours}h após o pagamento.",
+  "deposit_tx_rejected": "Essa transação não pode ser creditada. Ela precisa ser um envio recebido na nossa carteira em uma das moedas aceitas ({assets}).",
   "deposit_paid_button": "✅ Já paguei — informar ID",
   "deposit_cancel_button": "✖️ Cancelar depósito",
   "deposit_cancelled": "Depósito cancelado.",
@@ -77,7 +71,6 @@
   "deposit_tx_mismatch": "A transação foi encontrada, mas não corresponde ao depósito (valor, moeda ou horário). Valor esperado: {amount} {asset}. Fale com o suporte se precisar.",
   "deposit_too_many_attempts": "Muitas tentativas para este depósito. Fale com o suporte.",
   "deposit_unavailable": "Não foi possível consultar a Binance agora. Tente novamente em alguns minutos.",
-
   "too_many_requests": "⏱️ Muitas requisições. Aguarde um momento e tente novamente.",
   "generic_error": "⚠️ Ocorreu um erro. Tente novamente em instantes.",
   "payment_error": "⚠️ Não foi possível iniciar o pagamento agora. Tente novamente ou escolha outra forma de pagamento.",

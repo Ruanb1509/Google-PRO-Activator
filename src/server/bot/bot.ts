@@ -13,7 +13,7 @@ import { availableStock, listProducts, localizedDescription, localizedName } fro
 import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, syncOrderPayment } from "@/server/orders/orders.service";
 import { getSettings } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
-import { binancePayAvailable, cancelDeposit, createDeposit, DepositError, verifyDeposit, type DepositErrorCode } from "@/server/wallet/deposit.service";
+import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, DepositError, type DepositErrorCode } from "@/server/wallet/deposit.service";
 
 /** Context enriched with the stored customer. The bot is only an interface: logic lives in services. */
 export interface StoreContext extends Context {
@@ -22,7 +22,7 @@ export interface StoreContext extends Context {
   tr: (key: MessageKey, vars?: Record<string, string | number>) => string;
 }
 
-type BotState = { await: "deposit_amount" } | { await: "deposit_tx"; depositId: string } | null;
+type BotState = { await: "deposit_amount" } | { await: "deposit_tx"; depositId?: string } | null;
 
 // ───────────────────────── Keyboards ─────────────────────────
 
@@ -208,6 +208,18 @@ async function showBalance(ctx: StoreContext) {
 async function askDepositAmount(ctx: StoreContext) {
   if (!(await binancePayAvailable())) return ctx.reply(ctx.tr("deposit_disabled"));
   const s = (await getSettings()).binancePay;
+  if (!s.requireExactAmount) {
+    // Open amount: pay any value first, then send the transaction id.
+    const kb = new InlineKeyboard().text(ctx.tr("deposit_paid_button"), "dep:claim");
+    return ctx.reply(
+      ctx.tr("deposit_open_instructions", {
+        payId: env().BINANCE_PAY_ID ?? "",
+        assets: s.acceptedAssets.join(", "),
+        hours: s.claimWindowHours,
+      }),
+      { parse_mode: "HTML", reply_markup: kb },
+    );
+  }
   const kb = new InlineKeyboard();
   s.presetAmountsCents.forEach((c, i) => {
     kb.text(`${(c / 100).toFixed(2)} ${s.asset}`, `dep:a:${c}`);
@@ -249,7 +261,9 @@ async function replyDepositError(ctx: StoreContext, code: DepositErrorCode) {
     NO_PENDING: ctx.tr("deposit_no_pending"),
     TOO_MANY_ATTEMPTS: ctx.tr("deposit_too_many_attempts"),
     TX_NOT_FOUND: ctx.tr("deposit_tx_not_found"),
-    TX_MISMATCH: ctx.tr("deposit_tx_mismatch", { amount: pending ? (pending.expectedCents / 100).toFixed(2) : "-", asset: pending?.asset ?? s.asset }),
+    TX_MISMATCH: s.requireExactAmount
+      ? ctx.tr("deposit_tx_mismatch", { amount: pending ? (pending.expectedCents / 100).toFixed(2) : "-", asset: pending?.asset ?? s.asset })
+      : ctx.tr("deposit_tx_rejected", { assets: s.acceptedAssets.join(", ") }),
     UNAVAILABLE: ctx.tr("deposit_unavailable"),
   };
   await ctx.reply(map[code], { parse_mode: "HTML" });
@@ -258,7 +272,7 @@ async function replyDepositError(ctx: StoreContext, code: DepositErrorCode) {
 async function handleDepositTx(ctx: StoreContext, txId: string) {
   await ctx.reply(ctx.tr("deposit_verifying"));
   try {
-    const r = await verifyDeposit(ctx.user, txId);
+    const r = await claimTransaction(ctx.user, txId);
     await setBotState(ctx.user.id, null);
     await ctx.reply(
       ctx.tr("deposit_confirmed", {
@@ -378,6 +392,11 @@ export function createBot(): Bot<StoreContext> {
     const s = (await getSettings()).binancePay;
     await setBotState(ctx.user.id, { await: "deposit_amount" });
     await ctx.reply(ctx.tr("deposit_custom_prompt", { asset: s.asset, min: (s.minDepositCents / 100).toFixed(2), max: (s.maxDepositCents / 100).toFixed(2) }));
+  });
+  bot.callbackQuery("dep:claim", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await setBotState(ctx.user.id, { await: "deposit_tx" });
+    await ctx.reply(ctx.tr("deposit_send_tx_prompt"), { parse_mode: "HTML" });
   });
   bot.callbackQuery(/^dep:tx:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();

@@ -168,6 +168,70 @@ export async function verifyDeposit(user: User, rawTxId: string): Promise<{ cred
   }
 }
 
+/**
+ * Open-amount top-up (default mode): the customer sends ANY amount to the store's Binance Pay ID and
+ * then the transaction id. The amount is read from the store's own Binance history and credited.
+ * Guarantees: the transaction must exist in OUR account, be incoming, be in an accepted USD stablecoin,
+ * be recent (claim window) and can be claimed only once, by anyone (unique provider_tx_id).
+ */
+export async function claimTransaction(user: User, rawTxId: string): Promise<{ creditedCents: number; balanceAfterCents: number; asset: string }> {
+  const settings = (await getSettings()).binancePay;
+  if (!settings.enabled || !binanceConfigured()) throw new DepositError("DISABLED");
+  if (settings.requireExactAmount) return verifyDeposit(user, rawTxId);
+  if (!(await rateLimit(`deposit:verify:${user.id}`, 6, 600))) throw new DepositError("RATE_LIMITED");
+
+  const txId = rawTxId.trim();
+  if (!TX_ID_RE.test(txId)) throw new DepositError("TX_INVALID");
+  if (await db().deposit.findUnique({ where: { providerTxId: txId } })) throw new DepositError("TX_USED");
+
+  const now = Date.now();
+  let tx;
+  try {
+    tx = await findPayTransaction(txId, { startTime: now - settings.claimWindowHours * 60 * 60 * 1000, endTime: now });
+  } catch (err) {
+    logger.error("deposit.binance_error", { err, userId: user.id });
+    throw new DepositError("UNAVAILABLE", err instanceof BinanceApiError ? err.message : "Binance unavailable");
+  }
+  if (!tx) throw new DepositError("TX_NOT_FOUND");
+
+  const cents = decimalToCents(tx.amount);
+  const incoming = cents !== null && cents > 0;
+  const assetOk = settings.acceptedAssets.includes(tx.currency);
+  if (!incoming || !assetOk) {
+    logger.warn("deposit.claim_rejected", { userId: user.id, txId, incoming, asset: tx.currency });
+    throw new DepositError("TX_MISMATCH");
+  }
+
+  const credited = cents!;
+  try {
+    return await db().$transaction(async (dbTx) => {
+      const deposit = await dbTx.deposit.create({
+        data: {
+          userId: user.id,
+          provider: "binance_pay",
+          status: "CONFIRMED",
+          requestedCents: credited,
+          expectedCents: credited,
+          creditedCents: credited,
+          asset: tx.currency,
+          providerTxId: txId,
+          payerId: tx.payerInfo?.binanceId != null ? String(tx.payerInfo.binanceId) : null,
+          rawTransaction: tx as unknown as Prisma.InputJsonValue,
+          attempts: 1,
+          expiresAt: new Date(),
+          confirmedAt: new Date(),
+        },
+      });
+      const moved = await moveBalance(dbTx, { userId: user.id, amountCents: credited, type: "DEPOSIT", depositId: deposit.id, note: `Binance Pay ${txId}` });
+      await audit({ actorType: "BOT", action: AuditActions.DEPOSIT_CONFIRMED, resourceType: "deposit", resourceId: deposit.id, details: { txId, credited, asset: tx.currency, userId: user.id, mode: "open_amount" } }, dbTx);
+      return { creditedCents: credited, balanceAfterCents: moved.balanceAfterCents, asset: tx.currency };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new DepositError("TX_USED");
+    throw err;
+  }
+}
+
 export async function expireDeposits(): Promise<number> {
   const r = await db().deposit.updateMany({
     where: { status: "PENDING", expiresAt: { lt: new Date(Date.now() - LATE_CLAIM_MS) } },

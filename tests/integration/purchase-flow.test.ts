@@ -35,7 +35,7 @@ describe.skipIf(!run)("purchase flow (PostgreSQL)", async () => {
   const { MockProvider } = await import("@/server/payments/providers/mock.provider");
   const { saveSettings, DEFAULT_SETTINGS } = await import("@/server/settings/settings.service");
   const { moveBalanceOnce } = await import("@/server/wallet/ledger.service");
-  const { createDeposit, verifyDeposit, DepositError } = await import("@/server/wallet/deposit.service");
+  const { createDeposit, verifyDeposit, claimTransaction, DepositError } = await import("@/server/wallet/deposit.service");
   const { runMaintenance } = await import("@/server/admin/maintenance.service");
   const { hashPassword } = await import("@/server/auth/password");
 
@@ -152,7 +152,29 @@ describe.skipIf(!run)("purchase flow (PostgreSQL)", async () => {
     expect((await db().user.findUniqueOrThrow({ where: { id: u.id } })).balanceCents).toBe(500);
   });
 
-  it("verifies Binance Pay deposits (exact amount, single use)", async () => {
+  it("credits any amount sent via Binance Pay, read from the API (open-amount mode)", async () => {
+    const u = await user(250);
+    binanceTx.current = { transactionId: "TX-OPEN-0001", transactionTime: Date.now() - 60_000, amount: "7.53000000", currency: "USDT", orderType: "C2C", payerInfo: { binanceId: 7 } };
+    const r = await claimTransaction(u, "TX-OPEN-0001");
+    expect(r).toMatchObject({ creditedCents: 753, balanceAfterCents: 753, asset: "USDT" });
+    // Single use, for anyone.
+    await expect(claimTransaction(u, "TX-OPEN-0001")).rejects.toMatchObject({ depositCode: "TX_USED" });
+    await expect(claimTransaction(await user(251), "TX-OPEN-0001")).rejects.toMatchObject({ depositCode: "TX_USED" });
+    // Outgoing transfers and non-accepted assets are rejected; unknown ids are not found.
+    binanceTx.current = { transactionId: "TX-OUT-0001", transactionTime: Date.now(), amount: "-5.00", currency: "USDT", orderType: "C2C" };
+    await expect(claimTransaction(u, "TX-OUT-0001")).rejects.toMatchObject({ depositCode: "TX_MISMATCH" });
+    binanceTx.current = { transactionId: "TX-BTC-0001", transactionTime: Date.now(), amount: "0.001", currency: "BTC", orderType: "C2C" };
+    await expect(claimTransaction(u, "TX-BTC-0001")).rejects.toMatchObject({ depositCode: "TX_MISMATCH" });
+    await expect(claimTransaction(u, "TX-NOPE-0001")).rejects.toMatchObject({ depositCode: "TX_NOT_FOUND" });
+    expect((await db().user.findUniqueOrThrow({ where: { id: u.id } })).balanceCents).toBe(753);
+    const dep = await db().deposit.findUniqueOrThrow({ where: { providerTxId: "TX-OPEN-0001" } });
+    expect(dep).toMatchObject({ status: "CONFIRMED", creditedCents: 753, payerId: "7" });
+  });
+
+  it("verifies Binance Pay deposits (exact-amount mode, single use)", async () => {
+    const { getSettings } = await import("@/server/settings/settings.service");
+    const current = await getSettings();
+    await saveSettings({ ...current, binancePay: { ...current.binancePay, requireExactAmount: true } }, adminId);
     const u = await user(300);
     const d = await createDeposit(u, 1000);
     expect(d.expectedCents).toBeGreaterThan(1000);
