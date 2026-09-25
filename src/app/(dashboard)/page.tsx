@@ -14,6 +14,7 @@ interface Stats {
   salesLast7Days: number;
   salesLast30Days: number;
   pendingOrders: number;
+  openTickets: number;
   paidAwaitingDelivery: number;
   activeProducts: number;
   availableStock: number;
@@ -81,6 +82,9 @@ export default function OverviewPage() {
         <Stat label="Produtos ativos" value={data.activeProducts} />
         <Stat label="Estoque disponível" value={data.availableStock} />
         <Stat label="Produtos com estoque baixo" value={data.lowStock.length} tone={data.lowStock.length ? "warn" : "ok"} />
+        <Link href="/support" className="block">
+          <Stat label="Tickets aguardando resposta" value={data.openTickets} tone={data.openTickets > 0 ? "warn" : "ok"} hint="Suporte pré e pós-compra" />
+        </Link>
       </div>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">

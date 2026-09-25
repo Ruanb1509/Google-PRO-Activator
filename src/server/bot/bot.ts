@@ -14,6 +14,8 @@ import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, 
 import { getSettings } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, DepositError, type DepositErrorCode } from "@/server/wallet/deposit.service";
+import { getOpenTicket } from "@/server/support/support.service";
+import { handleSupportMessage, registerSupportHandlers, showSupport, type SupportState } from "@/server/bot/support.handlers";
 
 /** Context enriched with the stored customer. The bot is only an interface: logic lives in services. */
 export interface StoreContext extends Context {
@@ -22,7 +24,7 @@ export interface StoreContext extends Context {
   tr: (key: MessageKey, vars?: Record<string, string | number>) => string;
 }
 
-type BotState = { await: "deposit_amount" } | { await: "deposit_tx"; depositId?: string } | null;
+type BotState = { await: "deposit_amount" } | { await: "deposit_tx"; depositId?: string } | SupportState | null;
 
 // ───────────────────────── Keyboards ─────────────────────────
 
@@ -31,7 +33,8 @@ function mainMenu(locale: Locale) {
   return new Keyboard()
     .text(tr("menu_buy")).text(tr("menu_orders")).row()
     .text(tr("menu_prices")).text(tr("menu_balance")).row()
-    .text(tr("menu_help")).text(tr("menu_language"))
+    .text(tr("menu_support")).text(tr("menu_help")).row()
+    .text(tr("menu_language"))
     .resized()
     .persistent()
     .placeholder(tr("menu_placeholder"));
@@ -45,8 +48,19 @@ function isMenu(text: string, key: MessageKey): boolean {
 
 // ───────────────────────── Screens ─────────────────────────
 
-async function showMenu(ctx: StoreContext) {
-  await ctx.reply(ctx.tr("welcome", { name: ctx.from?.first_name ?? "" }), { parse_mode: "HTML", reply_markup: mainMenu(ctx.locale) });
+/** Welcome banner served from /public (Telegram downloads it by URL). */
+const WELCOME_IMAGE_PATH = "/brand/welcome.jpg";
+
+async function showMenu(ctx: StoreContext, opts: { banner?: boolean } = {}) {
+  const text = ctx.tr("welcome", { name: ctx.from?.first_name ?? "" });
+  if (opts.banner) {
+    try {
+      return await ctx.replyWithPhoto(`${env().APP_URL}${WELCOME_IMAGE_PATH}`, { caption: text, parse_mode: "HTML", reply_markup: mainMenu(ctx.locale) });
+    } catch (err) {
+      logger.warn("bot.welcome_image_failed", { err }); // fall back to text
+    }
+  }
+  await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenu(ctx.locale) });
 }
 
 async function showProducts(ctx: StoreContext) {
@@ -334,13 +348,14 @@ export function createBot(): Bot<StoreContext> {
   const bot = new Bot<StoreContext>(e.TELEGRAM_BOT_TOKEN, process.env.TELEGRAM_BOT_INFO ? { botInfo: JSON.parse(process.env.TELEGRAM_BOT_INFO) } : undefined);
 
   bot.use(loadUser);
+  registerSupportHandlers(bot); // before the generic text handler so /suporte is matched
 
   bot.command("start", async (ctx) => {
     await setBotState(ctx.user.id, null);
     if (!ctx.user.locale) {
       return ctx.reply(t(ctx.locale, "lang_prompt"), { reply_markup: languageKeyboard });
     }
-    await showMenu(ctx);
+    await showMenu(ctx, { banner: true });
     const payload = ctx.match;
     const paid = typeof payload === "string" ? /^paid_(\d+)$/.exec(payload) : null;
     if (paid) {
@@ -361,7 +376,7 @@ export function createBot(): Bot<StoreContext> {
     ctx.locale = locale;
     await ctx.answerCallbackQuery();
     await ctx.reply(t(locale, "lang_set"), { reply_markup: mainMenu(locale) });
-    await showMenu(ctx);
+    await showMenu(ctx, { banner: true });
   });
   bot.callbackQuery("menu:buy", async (ctx) => {
     await ctx.answerCallbackQuery();
@@ -428,6 +443,7 @@ export function createBot(): Bot<StoreContext> {
     if (isMenu(text, "menu_prices")) return clearStateThen(ctx, showPrices);
     if (isMenu(text, "menu_balance")) return clearStateThen(ctx, showBalance);
     if (isMenu(text, "menu_help")) return clearStateThen(ctx, showHelp);
+    if (isMenu(text, "menu_support")) return clearStateThen(ctx, showSupport);
     if (isMenu(text, "menu_language")) return ctx.reply(t(ctx.locale, "lang_prompt"), { reply_markup: languageKeyboard });
 
     const state = ctx.user.botState as BotState;
@@ -437,8 +453,21 @@ export function createBot(): Bot<StoreContext> {
       return startDeposit(ctx, cents);
     }
     if (state?.await === "deposit_tx") return handleDepositTx(ctx, text);
+    if (state?.await === "support_message") return handleSupportMessage(ctx, state, text);
 
     if (!ctx.user.locale) return ctx.reply(t(ctx.locale, "lang_prompt"), { reply_markup: languageKeyboard });
+    // A customer with an open ticket can simply type: the message goes to the ticket.
+    if (await getOpenTicket(ctx.user.id)) return handleSupportMessage(ctx, null, text);
+    await ctx.reply(ctx.tr("unknown_command"), { reply_markup: mainMenu(ctx.locale) });
+  });
+
+  // Screenshots for support (largest size is the last one).
+  bot.on("message:photo", async (ctx) => {
+    const state = ctx.user.botState as BotState;
+    const photo = ctx.message.photo.at(-1);
+    if (photo && (state?.await === "support_message" || (await getOpenTicket(ctx.user.id)))) {
+      return handleSupportMessage(ctx, state?.await === "support_message" ? state : null, ctx.message.caption, photo.file_id);
+    }
     await ctx.reply(ctx.tr("unknown_command"), { reply_markup: mainMenu(ctx.locale) });
   });
 

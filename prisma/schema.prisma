@@ -68,6 +68,22 @@ enum LedgerType {
   ADJUSTMENT
 }
 
+enum TicketType {
+  PRE_SALE
+  POST_SALE
+}
+
+enum TicketStatus {
+  OPEN /// waiting for the support team
+  ANSWERED /// support replied, waiting for the customer
+  CLOSED
+}
+
+enum MessageAuthor {
+  CUSTOMER
+  SUPPORT
+}
+
 enum ActorType {
   ADMIN
   SYSTEM
@@ -97,6 +113,7 @@ model User {
   ledger         BalanceTransaction[]
   inventoryItems InventoryItem[]
   botEvents      BotEvent[]
+  tickets        SupportTicket[]
 
   @@map("users")
 }
@@ -201,6 +218,7 @@ model Order {
   inventoryItem InventoryItem?
   events        OrderEvent[]
   ledger        BalanceTransaction[]
+  tickets       SupportTicket[]
 
   @@index([status, createdAt])
   @@index([userId, createdAt])
@@ -322,6 +340,46 @@ model BalanceTransaction {
   @@map("balance_transactions")
 }
 
+// ───────────────────────────── Customer support ─────────────────────────────
+
+/// Support conversation opened from the bot: pre-sale questions or problems with an order.
+model SupportTicket {
+  id            String       @id @default(cuid())
+  number        Int          @unique @default(autoincrement())
+  userId        String       @map("user_id")
+  type          TicketType
+  orderId       String?      @map("order_id")
+  status        TicketStatus @default(OPEN)
+  lastMessageAt DateTime     @default(now()) @map("last_message_at")
+  closedAt      DateTime?    @map("closed_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  user     User             @relation(fields: [userId], references: [id])
+  order    Order?           @relation(fields: [orderId], references: [id])
+  messages SupportMessage[]
+
+  @@index([status, lastMessageAt])
+  @@index([userId, status])
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id             String        @id @default(cuid())
+  ticketId       String        @map("ticket_id")
+  author         MessageAuthor
+  adminId        String?       @map("admin_id")
+  text           String
+  telegramFileId String?       @map("telegram_file_id") /// photo sent by the customer (downloaded on demand)
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  admin  Admin?        @relation(fields: [adminId], references: [id])
+
+  @@index([ticketId, createdAt])
+  @@map("support_messages")
+}
+
 // ───────────────────────────── Administration ─────────────────────────────
 
 model Admin {
@@ -339,8 +397,9 @@ model Admin {
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  sessions  AdminSession[]
-  auditLogs AuditLog[]
+  sessions        AdminSession[]
+  auditLogs       AuditLog[]
+  supportMessages SupportMessage[]
 
   @@map("admins")
 }

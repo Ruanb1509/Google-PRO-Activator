@@ -1,6 +1,7 @@
 import { db } from "@/server/common/db";
 import { listProducts } from "@/server/products/products.service";
 import { getSettings } from "@/server/settings/settings.service";
+import { openTicketsCount } from "@/server/support/support.service";
 
 const PAID = ["PAID", "DELIVERED"] as const;
 
@@ -61,6 +62,7 @@ export async function dashboardStats() {
 
   const active = products.filter((p) => p.isActive);
   return {
+    openTickets: await openTicketsCount(),
     totalSales: totals,
     revenueBrlCents: byCurrency.find((c) => c.currency === "BRL")?._sum.amountCents ?? 0,
     revenueUsdCents: byCurrency.find((c) => c.currency === "USD")?._sum.amountCents ?? 0,

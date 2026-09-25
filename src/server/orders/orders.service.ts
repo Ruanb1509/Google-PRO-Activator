@@ -125,7 +125,9 @@ export async function createOrder(user: User, productId: string, methodKey: stri
       locale,
     });
   } catch (err) {
-    logger.error("order.create_payment_failed", { err, orderId: order.id, provider: provider.name });
+    // Business refusals (e.g. insufficient balance) are expected; provider/network failures are errors.
+    if (err instanceof AppError) logger.info("order.payment_refused", { code: err.code, orderId: order.id, provider: provider.name });
+    else logger.error("order.create_payment_failed", { err, orderId: order.id, provider: provider.name });
     await db().$transaction(async (tx) => {
       await tx.order.update({ where: { id: order.id }, data: { status: "FAILED" } });
       await tx.payment.update({ where: { orderId: order.id }, data: { status: "FAILED" } });

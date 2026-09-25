@@ -38,6 +38,7 @@ describe.skipIf(!run)("purchase flow (PostgreSQL)", async () => {
   const { createDeposit, verifyDeposit, claimTransaction, DepositError } = await import("@/server/wallet/deposit.service");
   const { runMaintenance } = await import("@/server/admin/maintenance.service");
   const { hashPassword } = await import("@/server/auth/password");
+  const support = await import("@/server/support/support.service");
 
   let adminId = "";
   let productId = "";
@@ -210,5 +211,42 @@ describe.skipIf(!run)("purchase flow (PostgreSQL)", async () => {
     await mockPay(o.orderId, "evt-late");
     expect((await db().order.findUniqueOrThrow({ where: { id: o.orderId } })).status).toBe("DELIVERED");
     expect(await syncOrderPayment(o.orderId)).toBe("PAID");
+  });
+
+  it("support: one open ticket per customer, replies reach the customer, closing works", async () => {
+    const u = await user(500);
+    const other = await user(501);
+    const [a, b] = await Promise.all([
+      support.submitCustomerMessage(u, { type: "PRE_SALE", text: "Funciona no Brasil?" }),
+      support.submitCustomerMessage(u, { type: "PRE_SALE", text: "E qual a validade?" }),
+    ]);
+    expect(a.ticketId).toBe(b.ticketId); // concurrent first messages -> a single ticket
+    expect([a.created, b.created].filter(Boolean)).toHaveLength(1);
+
+    // Post-sale ticket cannot reference someone else's order.
+    const foreignOrder = await db().order.findFirstOrThrow({ where: { userId: { not: other.id } } });
+    await expect(support.submitCustomerMessage(other, { type: "POST_SALE", orderId: foreignOrder.id, text: "x" })).rejects.toMatchObject({ supportCode: "ORDER_NOT_FOUND" });
+    await expect(support.submitCustomerMessage(other, { text: "sem ticket" })).rejects.toMatchObject({ supportCode: "NO_OPEN_TICKET" });
+    await expect(support.submitCustomerMessage(u, { text: "   " })).rejects.toMatchObject({ supportCode: "EMPTY" });
+
+    sent.length = 0;
+    const r = await support.replyToTicket(a.ticketId, adminId, "Sim! Validade de 12 meses.", null);
+    expect(r.delivered).toBe(true);
+    expect(sent[0]!.chatId).toBe(u.telegramId.toString());
+    expect(sent[0]!.html).toContain("Sim! Validade de 12 meses.");
+
+    const t1 = await support.getTicket(a.ticketId);
+    expect(t1.status).toBe("ANSWERED");
+    expect(t1.messages.map((m) => m.author)).toEqual(["CUSTOMER", "CUSTOMER", "SUPPORT"]);
+
+    await support.submitCustomerMessage(u, { text: "Obrigado!" }); // customer answers -> back to OPEN
+    expect((await support.getTicket(a.ticketId)).status).toBe("OPEN");
+    expect(await support.closeByCustomer(u.id, a.ticketId)).toBe(t1.number);
+    // After closing, a new conversation opens a new ticket.
+    const next = await support.submitCustomerMessage(u, { type: "POST_SALE", text: "Novo problema" });
+    expect(next.created).toBe(true);
+    expect(next.ticketId).not.toBe(a.ticketId);
+    const list = await support.listTickets({ page: 1, pageSize: 10 });
+    expect(list.counts.OPEN).toBeGreaterThanOrEqual(1);
   });
 });
