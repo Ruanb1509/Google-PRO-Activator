@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+/* Design tokens (dark first). Utilities like bg-card / text-muted / border-line read these vars. */
+@theme {
+  --color-bg: #0b0f17;
+  --color-card: #121826;
+  --color-card-2: #182033;
+  --color-line: #253049;
+  --color-fg: #e6eaf2;
+  --color-muted: #8b95a9;
+  --color-accent: #4f8cff;
+  --color-accent-fg: #ffffff;
+  --color-ok: #22c55e;
+  --color-warn: #f59e0b;
+  --color-bad: #ef4444;
+  --color-info: #38bdf8;
+  /* Categorical series (validated reference palette, dark steps), fixed order */
+  --color-chart-1: #3987e5;
+  --color-chart-2: #d95926;
+  --color-chart-3: #199e70;
+  --color-chart-4: #c98500;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-bg: #f5f7fb;
+    --color-card: #ffffff;
+    --color-card-2: #eef2f8;
+    --color-line: #dbe2ee;
+    --color-fg: #111827;
+    --color-muted: #5b6475;
+    --color-accent: #2563eb;
+    --color-chart-1: #2a78d6;
+    --color-chart-2: #eb6834;
+    --color-chart-3: #1baf7a;
+    --color-chart-4: #eda100;
+  }
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+select,
+textarea {
+  color-scheme: dark light;
+}
+
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-card-2);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  outline: none;
+}
+.input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+.label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-muted);
+  margin-bottom: 0.25rem;
+}

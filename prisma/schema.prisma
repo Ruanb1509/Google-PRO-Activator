@@ -1,0 +1,413 @@
+// Telegram Digital Store - relational model (PostgreSQL)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Locale {
+  pt_BR
+  en_US
+}
+
+enum AdminRole {
+  ADMIN
+  STAFF
+  VIEWER
+}
+
+enum Currency {
+  BRL
+  USD
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  DELIVERED
+  FAILED
+  EXPIRED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  REFUNDED
+  CANCELLED
+}
+
+enum InventoryStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  INVALID
+  CANCELLED
+}
+
+enum DepositStatus {
+  PENDING
+  CONFIRMED
+  EXPIRED
+  REJECTED
+}
+
+enum LedgerType {
+  DEPOSIT
+  PURCHASE
+  REFUND
+  ADJUSTMENT
+}
+
+enum ActorType {
+  ADMIN
+  SYSTEM
+  BOT
+  WEBHOOK
+}
+
+// ───────────────────────────── Customers ─────────────────────────────
+
+/// Telegram customers. Only the data needed to operate the store is stored.
+model User {
+  id           String   @id @default(cuid())
+  telegramId   BigInt   @unique @map("telegram_id")
+  username     String?
+  firstName    String?  @map("first_name")
+  languageCode String?  @map("language_code") /// language reported by Telegram
+  locale       Locale? /// language chosen by the user (null = not chosen yet)
+  country      String? /// ISO-3166 alpha-2, learned from payment flows
+  balanceCents Int      @default(0) @map("balance_cents") /// store credit (USD cents)
+  isBlocked    Boolean  @default(false) @map("is_blocked")
+  botState     Json?    @map("bot_state") /// short-lived conversation state (e.g. awaiting tx id)
+  createdAt    DateTime @default(now()) @map("created_at")
+  lastSeenAt   DateTime @default(now()) @map("last_seen_at")
+
+  orders         Order[]
+  deposits       Deposit[]
+  ledger         BalanceTransaction[]
+  inventoryItems InventoryItem[]
+  botEvents      BotEvent[]
+
+  @@map("users")
+}
+
+// ───────────────────────────── Catalog ─────────────────────────────
+
+model Product {
+  id                String    @id @default(cuid())
+  name              String
+  nameEn            String?   @map("name_en")
+  description       String    @default("")
+  descriptionEn     String?   @map("description_en")
+  category          String    @default("")
+  priceBrlCents     Int       @map("price_brl_cents")
+  priceUsdCents     Int       @map("price_usd_cents")
+  isActive          Boolean   @default(true) @map("is_active")
+  lowStockThreshold Int?      @map("low_stock_threshold") /// overrides the global setting
+  sortOrder         Int       @default(0) @map("sort_order")
+  deletedAt         DateTime? @map("deleted_at") /// soft delete keeps order history intact
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  inventoryItems InventoryItem[]
+  orders         Order[]
+
+  @@index([isActive, deletedAt])
+  @@map("products")
+}
+
+/// A unique link/code. Values are encrypted at rest; `valueHash` enables global duplicate detection.
+model InventoryItem {
+  id             String          @id @default(cuid())
+  productId      String          @map("product_id")
+  valueEncrypted String          @map("value_encrypted")
+  valueHash      String          @unique @map("value_hash")
+  valuePreview   String          @map("value_preview") /// masked value for listings
+  status         InventoryStatus @default(AVAILABLE)
+  orderId        String?         @unique @map("order_id") /// orders 1:1 inventory_items
+  userId         String?         @map("user_id")
+  reservedUntil  DateTime?       @map("reserved_until")
+  batchId        String?         @map("batch_id")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  reservedAt     DateTime?       @map("reserved_at")
+  soldAt         DateTime?       @map("sold_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  product Product              @relation(fields: [productId], references: [id])
+  order   Order?               @relation(fields: [orderId], references: [id])
+  user    User?                @relation(fields: [userId], references: [id])
+  events  InventoryItemEvent[]
+
+  @@index([productId, status, createdAt])
+  @@index([status, reservedUntil])
+  @@map("inventory_items")
+}
+
+model InventoryItemEvent {
+  id        String    @id @default(cuid())
+  itemId    String    @map("item_id")
+  type      String /// ADDED, RESERVED, RELEASED, SOLD, INVALIDATED, ...
+  orderId   String?   @map("order_id")
+  actorType ActorType @map("actor_type")
+  adminId   String?   @map("admin_id")
+  details   Json?
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, createdAt])
+  @@map("inventory_item_events")
+}
+
+// ───────────────────────────── Orders & payments ─────────────────────────────
+
+model Order {
+  id                  String      @id @default(cuid())
+  number              Int         @unique @default(autoincrement())
+  userId              String      @map("user_id")
+  productId           String      @map("product_id")
+  productName         String      @map("product_name") /// snapshot at purchase time
+  status              OrderStatus @default(PENDING)
+  currency            Currency
+  amountCents         Int         @map("amount_cents")
+  paymentMethod       String      @map("payment_method") /// e.g. pix, card, balance, mock
+  country             String? /// country reported by the payment flow
+  locale              Locale
+  expiresAt           DateTime    @map("expires_at")
+  paidAt              DateTime?   @map("paid_at")
+  deliveredAt         DateTime?   @map("delivered_at")
+  deliveryAttempts    Int         @default(0) @map("delivery_attempts")
+  deliveryLockedUntil DateTime?   @map("delivery_locked_until")
+  deliveryError       String?     @map("delivery_error")
+  refundedAt          DateTime?   @map("refunded_at")
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
+
+  user          User                 @relation(fields: [userId], references: [id])
+  product       Product              @relation(fields: [productId], references: [id])
+  payment       Payment?
+  inventoryItem InventoryItem?
+  events        OrderEvent[]
+  ledger        BalanceTransaction[]
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+  @@index([productId, status])
+  @@map("orders")
+}
+
+model OrderEvent {
+  id        String    @id @default(cuid())
+  orderId   String    @map("order_id")
+  type      String
+  message   String?
+  actorType ActorType @map("actor_type")
+  adminId   String?   @map("admin_id")
+  details   Json?
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  orderId           String        @unique @map("order_id") /// orders 1:1 payments
+  provider          String /// mercadopago, stripe, balance, mock...
+  providerPaymentId String?       @map("provider_payment_id")
+  providerReference String?       @map("provider_reference") /// secondary id (e.g. Stripe payment_intent)
+  idempotencyKey    String        @unique @map("idempotency_key")
+  status            PaymentStatus @default(PENDING)
+  currency          Currency
+  amountCents       Int           @map("amount_cents")
+  checkoutUrl       String?       @map("checkout_url")
+  pixCopyPaste      String?       @map("pix_copy_paste")
+  country           String?
+  metadata          Json?
+  paidAt            DateTime?     @map("paid_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  order  Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  events PaymentEvent[]
+
+  @@unique([provider, providerPaymentId])
+  @@index([provider, providerReference])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+/// Every webhook received. (provider, eventId) is unique -> duplicate webhooks are ignored.
+model PaymentEvent {
+  id             String    @id @default(cuid())
+  provider       String
+  eventId        String    @map("event_id")
+  eventType      String    @map("event_type")
+  paymentId      String?   @map("payment_id")
+  signatureValid Boolean   @map("signature_valid")
+  payload        Json
+  processedAt    DateTime? @map("processed_at")
+  error          String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@unique([provider, eventId])
+  @@index([createdAt])
+  @@map("payment_events")
+}
+
+// ───────────────────────────── Store credit (Binance Pay) ─────────────────────────────
+
+/// A top-up request. The customer sends exactly `expectedCents` and then the Binance Pay transaction id.
+model Deposit {
+  id             String        @id @default(cuid())
+  userId         String        @map("user_id")
+  provider       String /// binance_pay
+  status         DepositStatus @default(PENDING)
+  requestedCents Int           @map("requested_cents")
+  expectedCents  Int           @map("expected_cents") /// unique amount the user must send
+  creditedCents  Int?          @map("credited_cents")
+  asset          String /// USDT, USDC...
+  providerTxId   String?       @unique @map("provider_tx_id") /// a transaction can only be claimed once
+  payerId        String?       @map("payer_id")
+  attempts       Int           @default(0)
+  expiresAt      DateTime      @map("expires_at")
+  confirmedAt    DateTime?     @map("confirmed_at")
+  rawTransaction Json?         @map("raw_transaction")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user   User                 @relation(fields: [userId], references: [id])
+  ledger BalanceTransaction[]
+
+  @@index([userId, status])
+  @@index([status, expectedCents])
+  @@map("deposits")
+}
+
+/// Append-only balance ledger. users.balance_cents is the running total.
+model BalanceTransaction {
+  id                String     @id @default(cuid())
+  userId            String     @map("user_id")
+  type              LedgerType
+  amountCents       Int        @map("amount_cents") /// positive = credit, negative = debit
+  balanceAfterCents Int        @map("balance_after_cents")
+  orderId           String?    @map("order_id")
+  depositId         String?    @unique @map("deposit_id")
+  adminId           String?    @map("admin_id")
+  note              String?
+  createdAt         DateTime   @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id])
+  order   Order?   @relation(fields: [orderId], references: [id])
+  deposit Deposit? @relation(fields: [depositId], references: [id])
+
+  @@unique([orderId, type])
+  @@index([userId, createdAt])
+  @@map("balance_transactions")
+}
+
+// ───────────────────────────── Administration ─────────────────────────────
+
+model Admin {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  passwordHash  String    @map("password_hash")
+  role          AdminRole @default(VIEWER)
+  isActive      Boolean   @default(true) @map("is_active")
+  totpSecretEnc String?   @map("totp_secret_enc")
+  totpEnabled   Boolean   @default(false) @map("totp_enabled")
+  failedLogins  Int       @default(0) @map("failed_logins")
+  lockedUntil   DateTime? @map("locked_until")
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  sessions  AdminSession[]
+  auditLogs AuditLog[]
+
+  @@map("admins")
+}
+
+model AdminSession {
+  id        String   @id @default(cuid())
+  adminId   String   @map("admin_id")
+  tokenHash String   @unique @map("token_hash")
+  ip        String?
+  userAgent String?  @map("user_agent")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("admin_sessions")
+}
+
+model AuditLog {
+  id           String    @id @default(cuid())
+  actorType    ActorType @map("actor_type")
+  adminId      String?   @map("admin_id")
+  action       String
+  resourceType String?   @map("resource_type")
+  resourceId   String?   @map("resource_id")
+  ip           String?
+  details      Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  admin Admin? @relation(fields: [adminId], references: [id])
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([resourceType, resourceId])
+  @@map("audit_logs")
+}
+
+model BotEvent {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  telegramId BigInt   @map("telegram_id")
+  type       String
+  payload    Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([telegramId, createdAt])
+  @@map("bot_events")
+}
+
+/// Key/value runtime configuration editable from the dashboard (payment methods, thresholds...).
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by")
+
+  @@map("settings")
+}
+
+/// Fixed-window rate limiting counters (no Redis needed on Vercel).
+model RateLimit {
+  key         String   @id
+  count       Int
+  windowStart DateTime @map("window_start")
+
+  @@index([windowStart])
+  @@map("rate_limits")
+}
