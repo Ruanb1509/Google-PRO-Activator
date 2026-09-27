@@ -1,4 +1,4 @@
-import { Bot, Context, InlineKeyboard, InputFile, Keyboard, type NextFunction } from "grammy";
+import { Bot, Context, GrammyError, InlineKeyboard, InputFile, Keyboard, type NextFunction } from "grammy";
 import type { User } from "@/generated/prisma/client";
 import type { Locale } from "@/generated/prisma/enums";
 import { env } from "@/server/config/env";
@@ -68,13 +68,27 @@ async function showProducts(ctx: StoreContext) {
   // Sold-out products stay listed (tagged) so customers can ask to be notified when they are back.
   const products = await listProducts();
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
-  const kb = new InlineKeyboard();
-  for (const p of products) {
-    const price = `${formatMoney(p.priceBrlCents, "BRL", ctx.locale)} / ${formatMoney(p.priceUsdCents, "USD", ctx.locale)}`;
-    const label = p.stock.available > 0 ? `${localizedName(p, ctx.locale)} · ${price}` : `${localizedName(p, ctx.locale)} · ${ctx.tr("sold_out_tag")}`;
-    kb.text(label, `p:${p.id}`).row();
+  const keyboard = (withIcons: boolean) => {
+    const kb = new InlineKeyboard();
+    for (const p of products) {
+      const price = `${formatMoney(p.priceBrlCents, "BRL", ctx.locale)} / ${formatMoney(p.priceUsdCents, "USD", ctx.locale)}`;
+      const label = p.stock.available > 0 ? `${localizedName(p, ctx.locale)} · ${price}` : `${localizedName(p, ctx.locale)} · ${ctx.tr("sold_out_tag")}`;
+      kb.text(label, `p:${p.id}`);
+      // Product logo on the left of the button (custom emoji, see product-emoji.service.ts).
+      if (withIcons && p.logoEmojiId) kb.icon(p.logoEmojiId);
+      kb.row();
+    }
+    return kb;
+  };
+  const withIcons = products.some((p) => p.logoEmojiId);
+  try {
+    await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(withIcons) });
+  } catch (err) {
+    // Telegram refuses button icons when the bot owner has no Premium: keep the menu working without them.
+    if (!withIcons || !(err instanceof GrammyError && err.error_code === 400)) throw err;
+    logger.warn("bot.product_icons_failed", { err });
+    await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(false) });
   }
-  await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: kb });
 }
 
 async function showProduct(ctx: StoreContext, productId: string) {

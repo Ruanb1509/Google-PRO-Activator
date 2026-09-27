@@ -60,6 +60,7 @@ Todas estão documentadas em [`.env.example`](.env.example). Nenhuma é exposta 
 | `CRON_SECRET` | ✅ | autenticação do Vercel Cron |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_WEBHOOK_SECRET` | ✅ | bot |
 | `ADMIN_ALERT_CHAT_IDS` | — | chats que recebem alertas (estoque baixo, falha de entrega) |
+| `TELEGRAM_EMOJI_OWNER_ID` | — | seu user id do Telegram (**conta Premium**); as logos dos produtos viram emojis personalizados exibidos à esquerda dos botões do menu "Escolha um produto" |
 | `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`, `MERCADOPAGO_PAYER_EMAIL` | PIX | Mercado Pago |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | cartão | Stripe |
 | `BINANCE_API_KEY`, `BINANCE_API_SECRET`, `BINANCE_PAY_ID` | saldo | Binance Pay |
