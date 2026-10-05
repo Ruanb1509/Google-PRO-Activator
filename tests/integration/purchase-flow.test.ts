@@ -97,11 +97,11 @@ describe.skipIf(!run)("purchase flow (PostgreSQL)", async () => {
     await Promise.all(
       orders.flatMap((o) => [mockPay(o.id, `evt-${o.id}`), mockPay(o.id, `evt-${o.id}`), mockPay(o.id, `evt2-${o.id}`)]),
     );
-    const after = await db().order.findMany({ where: { id: { in: orders.map((o) => o.id) } }, include: { inventoryItem: true } });
+    const after = await db().order.findMany({ where: { id: { in: orders.map((o) => o.id) } }, include: { inventoryItems: true } });
     expect(after.every((o) => o.status === "DELIVERED")).toBe(true);
-    const itemIds = after.map((o) => o.inventoryItem?.id);
+    const itemIds = after.flatMap((o) => o.inventoryItems.map((i) => i.id));
     expect(new Set(itemIds).size).toBe(orders.length);
-    expect(after.every((o) => o.inventoryItem?.status === "SOLD")).toBe(true);
+    expect(after.every((o) => o.inventoryItems.length === 1 && o.inventoryItems[0]!.status === "SOLD")).toBe(true);
     expect(sent).toHaveLength(orders.length); // one delivery message per order
     expect(sent[0]!.html).toMatch(/LINK-00\d/);
     const events = await db().paymentEvent.count();
@@ -121,9 +121,9 @@ describe.skipIf(!run)("purchase flow (PostgreSQL)", async () => {
     // Simulate the reserved item being lost (e.g. marked invalid by staff), leaving no stock.
     await db().inventoryItem.updateMany({ where: { orderId: order.orderId }, data: { status: "INVALID", orderId: null, userId: null, reservedUntil: null } });
     await mockPay(order.orderId, "evt-oos");
-    const o = await db().order.findUniqueOrThrow({ where: { id: order.orderId }, include: { inventoryItem: true, events: true } });
+    const o = await db().order.findUniqueOrThrow({ where: { id: order.orderId }, include: { inventoryItems: true, events: true } });
     expect(o.status).toBe("PAID");
-    expect(o.inventoryItem).toBeNull();
+    expect(o.inventoryItems).toHaveLength(0);
     expect(o.events.some((e) => e.type === "OUT_OF_STOCK_AFTER_PAYMENT")).toBe(true);
   });
 
@@ -144,13 +144,38 @@ describe.skipIf(!run)("purchase flow (PostgreSQL)", async () => {
 
     // Refund returns credit; delivered item stays SOLD.
     await refundOrder(delivered[0]!.id, adminId, null);
-    const refunded = await db().order.findUniqueOrThrow({ where: { id: delivered[0]!.id }, include: { inventoryItem: true } });
+    const refunded = await db().order.findUniqueOrThrow({ where: { id: delivered[0]!.id }, include: { inventoryItems: true } });
     expect(refunded.status).toBe("REFUNDED");
-    expect(refunded.inventoryItem?.status).toBe("SOLD");
+    expect(refunded.inventoryItems[0]?.status).toBe("SOLD");
     expect((await db().user.findUniqueOrThrow({ where: { id: u.id } })).balanceCents).toBe(500);
     // Refund is idempotent.
     await expect(refundOrder(delivered[0]!.id, adminId, null)).rejects.toThrow();
     expect((await db().user.findUniqueOrThrow({ where: { id: u.id } })).balanceCents).toBe(500);
+  });
+
+  it("buys several units in one order: total price, all units reserved and delivered together", async () => {
+    const productId = (await db().product.create({ data: { name: "Produto Quantidade", priceBrlCents: 2000, priceUsdCents: 400 } })).id;
+    await addItems({ productId, text: "QTY-1\nQTY-2\nQTY-3" }, adminId, null);
+    const u = await user(220);
+    // More than in stock: nothing is reserved.
+    await expect(createOrder(u, productId, "mock", 4)).rejects.toMatchObject({ code: "OUT_OF_STOCK" });
+    expect(await db().inventoryItem.count({ where: { productId, status: "RESERVED", userId: u.id } })).toBe(0);
+    await expect(createOrder(u, productId, "mock", 0)).rejects.toMatchObject({ code: "INVALID_QUANTITY" });
+
+    const order = await createOrder(u, productId, "mock", 3);
+    expect(order).toMatchObject({ quantity: 3, amountCents: 3 * 2000, currency: "BRL" });
+    expect(await db().inventoryItem.count({ where: { orderId: order.orderId, status: "RESERVED" } })).toBe(3);
+    // Same tap again re-uses the open order.
+    expect((await createOrder(u, productId, "mock", 3)).orderId).toBe(order.orderId);
+
+    sent.length = 0;
+    await mockPay(order.orderId, "evt-qty");
+    const o = await db().order.findUniqueOrThrow({ where: { id: order.orderId }, include: { inventoryItems: true } });
+    expect(o.status).toBe("DELIVERED");
+    expect(o.inventoryItems).toHaveLength(3);
+    expect(o.inventoryItems.every((i) => i.status === "SOLD")).toBe(true);
+    expect(sent).toHaveLength(1); // one message with every link
+    for (const v of ["QTY-1", "QTY-2", "QTY-3"]) expect(sent[0]!.html).toContain(v);
   });
 
   it("credits any amount sent via Binance Pay, read from the API (open-amount mode)", async () => {

@@ -13,6 +13,7 @@ interface OrderRow {
   number: number;
   user: MiniUser;
   productName: string;
+  quantity: number;
   country: string | null;
   currency: string;
   amountCents: number;
@@ -21,7 +22,7 @@ interface OrderRow {
   createdAt: string;
   deliveredAt: string | null;
   payment: { provider: string; status: string; providerPaymentId: string | null } | null;
-  inventoryItem: { id: string; valuePreview: string; status: string } | null;
+  inventoryItems: { id: string; valuePreview: string; status: string }[];
 }
 
 const FILTERS: { key: string; label: string; status?: string; delivered?: "yes" | "no" }[] = [
@@ -133,7 +134,10 @@ export default function OrdersPage() {
                       </Link>
                     </Td>
                     <Td className="font-mono text-xs">{o.user.telegramId}</Td>
-                    <Td>{o.productName}</Td>
+                    <Td>
+                      {o.quantity > 1 && <span className="font-semibold">{o.quantity}× </span>}
+                      {o.productName}
+                    </Td>
                     <Td>{o.country ?? "—"}</Td>
                     <Td>{o.currency}</Td>
                     <Td className="whitespace-nowrap tabular-nums">{money(o.amountCents, o.currency)}</Td>
@@ -146,11 +150,13 @@ export default function OrdersPage() {
                     </Td>
                     <Td className="whitespace-nowrap">{fmtDate(o.createdAt)}</Td>
                     <Td>
-                      {o.inventoryItem ? (
-                        <span className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs">{o.inventoryItem.valuePreview}</span>
-                          {o.inventoryItem.status !== "SOLD" && <InventoryStatusBadge status={o.inventoryItem.status} />}
-                        </span>
+                      {o.inventoryItems.length ? (
+                        o.inventoryItems.map((it) => (
+                          <span key={it.id} className="flex items-center gap-1.5">
+                            <span className="font-mono text-xs">{it.valuePreview}</span>
+                            {it.status !== "SOLD" && <InventoryStatusBadge status={it.status} />}
+                          </span>
+                        ))
                       ) : (
                         "—"
                       )}

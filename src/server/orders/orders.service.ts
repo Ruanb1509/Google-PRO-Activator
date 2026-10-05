@@ -16,8 +16,8 @@ import { deliverOrder } from "@/server/notifications/delivery.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import type { CreatePaymentResult } from "@/server/payments/payment-provider";
 
-/** Reservation outlives the order a bit so a payment confirmed right at expiry still finds its item. */
-const RESERVATION_GRACE_MS = 10 * 60 * 1000;
+/** Most units of one product a customer can buy in a single order (keeps the delivery message short). */
+export const MAX_QUANTITY_PER_ORDER = 10;
 
 /** Enabled methods whose provider is configured, customer-locale suggestions first. */
 export async function availablePaymentMethods(locale: "pt_BR" | "en_US"): Promise<PaymentMethodConfig[]> {
@@ -41,14 +41,16 @@ export interface CreatedOrder {
   amountCents: number;
   currency: "BRL" | "USD";
   productName: string;
+  quantity: number;
   expiresAt: Date;
   method: PaymentMethodConfig;
   payment: CreatePaymentResult;
   reused: boolean;
 }
 
-export async function createOrder(user: User, productId: string, methodKey: string): Promise<CreatedOrder> {
+export async function createOrder(user: User, productId: string, methodKey: string, quantity = 1): Promise<CreatedOrder> {
   if (user.isBlocked) throw Errors.forbidden("User blocked");
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_QUANTITY_PER_ORDER) throw Errors.badRequest("Invalid quantity", "INVALID_QUANTITY");
   const locale = user.locale ?? "en_US";
   const settings = await getSettings();
   const method = (await availablePaymentMethods(locale)).find((m) => m.key === methodKey);
@@ -60,9 +62,9 @@ export async function createOrder(user: User, productId: string, methodKey: stri
 
   await enforceRateLimit(`order:create:${user.id}`, 8, 600);
 
-  // Re-use an open order for the same product/method instead of creating duplicates on repeated taps.
+  // Re-use an open order for the same product/method/quantity instead of creating duplicates on repeated taps.
   const open = await db().order.findFirst({
-    where: { userId: user.id, productId, paymentMethod: method.key, status: "PENDING", expiresAt: { gt: new Date(Date.now() + 2 * 60 * 1000) } },
+    where: { userId: user.id, productId, quantity, paymentMethod: method.key, status: "PENDING", expiresAt: { gt: new Date(Date.now() + 2 * 60 * 1000) } },
     include: { payment: true },
     orderBy: { createdAt: "desc" },
   });
@@ -74,6 +76,7 @@ export async function createOrder(user: User, productId: string, methodKey: stri
       amountCents: open.amountCents,
       currency: open.currency,
       productName: open.productName,
+      quantity: open.quantity,
       expiresAt: open.expiresAt,
       method,
       reused: true,
@@ -88,18 +91,21 @@ export async function createOrder(user: User, productId: string, methodKey: stri
   }
 
   const assertPendingLimit = async (tx: Prisma.TransactionClient) => {
-    // Counts every order that may still hold a reservation (expiry + grace), not just unexpired ones.
-    const pending = await tx.order.count({ where: { userId: user.id, status: "PENDING", expiresAt: { gt: new Date(Date.now() - RESERVATION_GRACE_MS) } } });
+    // Counts every order that still holds a reservation (reservations end when the order expires).
+    const pending = await tx.order.count({ where: { userId: user.id, status: "PENDING", expiresAt: { gt: new Date() } } });
     if (pending >= settings.maxPendingOrdersPerUser) throw new AppError("TOO_MANY_PENDING", "Too many pending orders", 409);
   };
   await assertPendingLimit(db());
 
   const currency = method.currency;
-  const amountCents = currency === "BRL" ? product.priceBrlCents : product.priceUsdCents;
+  const amountCents = (currency === "BRL" ? product.priceBrlCents : product.priceUsdCents) * quantity;
   if (method.provider === "balance" && user.balanceCents < amountCents) throw new InsufficientBalanceError(user.balanceCents);
 
-  const ttlMinutes = Math.max(settings.orderTtlMinutes, provider.minTtlMinutes ?? 0);
-  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+  // The order (and the stock it reserves) expires after `orderTtlMinutes`. Some providers require longer
+  // lived charges (e.g. PIX >= 30 min); maintenance cancels those at the provider once the order expires,
+  // and a payment that still lands late is handled like any late payment (stock permitting).
+  const expiresAt = new Date(Date.now() + settings.orderTtlMinutes * 60 * 1000);
+  const providerExpiresAt = new Date(Date.now() + Math.max(settings.orderTtlMinutes, provider.minTtlMinutes ?? 0) * 60 * 1000);
   const productName = localizedName(product, locale);
 
   // 1) Order + temporary stock reservation, atomically.
@@ -108,11 +114,11 @@ export async function createOrder(user: User, productId: string, methodKey: stri
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order:create:${user.id}`}))`;
     await assertPendingLimit(tx);
     const o = await tx.order.create({
-      data: { userId: user.id, productId, productName, status: "PENDING", currency, amountCents, paymentMethod: method.key, locale, expiresAt },
+      data: { userId: user.id, productId, productName, quantity, status: "PENDING", currency, amountCents, paymentMethod: method.key, locale, expiresAt },
     });
-    await reserveForOrder(tx, { productId, orderId: o.id, userId: user.id, until: new Date(expiresAt.getTime() + RESERVATION_GRACE_MS) });
+    await reserveForOrder(tx, { productId, orderId: o.id, userId: user.id, quantity, until: expiresAt });
     await tx.payment.create({ data: { orderId: o.id, provider: provider.name, idempotencyKey: o.id, currency, amountCents } });
-    await orderEvent({ orderId: o.id, type: "CREATED", actorType: "BOT", details: { method: method.key, provider: provider.name, amountCents, currency } }, tx);
+    await orderEvent({ orderId: o.id, type: "CREATED", actorType: "BOT", details: { method: method.key, provider: provider.name, quantity, amountCents, currency } }, tx);
     return o;
   });
 
@@ -126,9 +132,9 @@ export async function createOrder(user: User, productId: string, methodKey: stri
       telegramId: user.telegramId.toString(),
       amountCents,
       currency,
-      description: `${productName} #${order.number}`,
+      description: `${quantity > 1 ? `${quantity}x ` : ""}${productName} #${order.number}`,
       idempotencyKey: order.id,
-      expiresAt,
+      expiresAt: providerExpiresAt,
       locale,
     });
   } catch (err) {
@@ -163,7 +169,7 @@ export async function createOrder(user: User, productId: string, methodKey: stri
     await applyPaymentStatus(payment.id, status, { actorType: "SYSTEM" });
   }
 
-  return { orderId: order.id, number: order.number, amountCents, currency, productName, expiresAt, method, payment: result, reused: false };
+  return { orderId: order.id, number: order.number, amountCents, currency, productName, quantity, expiresAt, method, payment: result, reused: false };
 }
 
 /**
@@ -225,17 +231,20 @@ export async function listUserOrders(userId: string, take = 10) {
   return db().order.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take });
 }
 
-/** Customer view of one of their own orders, including the delivered item. */
+/** Customer view of one of their own orders, including the delivered items (only once every unit is assigned). */
 export async function getUserOrder(userId: string, orderId: string) {
-  const order = await db().order.findFirst({ where: { id: orderId, userId }, include: { inventoryItem: true, payment: true } });
+  const order = await db().order.findFirst({
+    where: { id: orderId, userId },
+    include: { inventoryItems: { where: { status: "SOLD" }, orderBy: { createdAt: "asc" } }, payment: true },
+  });
   if (!order) return null;
-  const canSeeItem = ["PAID", "DELIVERED"].includes(order.status) && order.inventoryItem?.status === "SOLD";
-  if (canSeeItem && !order.deliveredAt) {
-    // The customer is about to see the item: it counts as delivered (so a later refund never returns it to stock).
+  const canSeeItems = ["PAID", "DELIVERED"].includes(order.status) && order.inventoryItems.length >= order.quantity;
+  if (canSeeItems && !order.deliveredAt) {
+    // The customer is about to see the items: they count as delivered (so a later refund never returns them to stock).
     await db().order.updateMany({ where: { id: order.id, status: "PAID" }, data: { status: "DELIVERED", deliveredAt: new Date(), deliveryError: null } });
-    await orderEvent({ orderId: order.id, type: "DELIVERED", actorType: "BOT", message: "Item shown in the customer's order view" });
+    await orderEvent({ orderId: order.id, type: "DELIVERED", actorType: "BOT", message: "Items shown in the customer's order view" });
   }
-  return { order, item: canSeeItem && order.inventoryItem ? decrypt(order.inventoryItem.valueEncrypted) : null };
+  return { order, items: canSeeItems ? order.inventoryItems.map((i) => decrypt(i.valueEncrypted)) : [] };
 }
 
 export interface OrderFilters {
@@ -279,7 +288,7 @@ export async function listOrders(f: OrderFilters) {
       include: {
         user: { select: { id: true, telegramId: true, username: true, firstName: true } },
         payment: { select: { provider: true, status: true, providerPaymentId: true } },
-        inventoryItem: { select: { id: true, valuePreview: true, status: true } },
+        inventoryItems: { select: { id: true, valuePreview: true, status: true }, orderBy: { createdAt: "asc" } },
       },
     }),
   ]);
@@ -293,7 +302,7 @@ export async function getOrderDetail(id: string) {
       user: true,
       product: { select: { id: true, name: true } },
       payment: { include: { events: { orderBy: { createdAt: "asc" }, select: { id: true, eventId: true, eventType: true, signatureValid: true, processedAt: true, error: true, createdAt: true } } } },
-      inventoryItem: { select: { id: true, valuePreview: true, status: true, soldAt: true } },
+      inventoryItems: { select: { id: true, valuePreview: true, status: true, soldAt: true }, orderBy: { createdAt: "asc" } },
       events: { orderBy: { createdAt: "asc" } },
       ledger: true,
     },
@@ -330,17 +339,17 @@ export async function resendDelivery(orderId: string, adminId: string) {
   return outcome;
 }
 
-/** Assigns stock to a paid order that had none (e.g. after restocking) and delivers it. */
+/** Assigns the missing stock to a paid order (e.g. after restocking) and delivers it. All-or-nothing. */
 export async function fulfillOutOfStockOrder(orderId: string, adminId: string, ip: string | null) {
-  const itemId = await db().$transaction(async (tx) => {
+  const sold = await db().$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
     if (order.status !== "PAID") throw Errors.conflict("Pedido não está pago aguardando entrega");
-    const id = await sellForOrder(tx, { productId: order.productId, orderId, userId: order.userId });
-    if (!id) throw Errors.outOfStock();
-    await orderEvent({ orderId, type: "ITEM_ASSIGNED", actorType: "ADMIN", adminId }, tx);
-    return id;
+    const n = await sellForOrder(tx, { productId: order.productId, orderId, userId: order.userId, quantity: order.quantity });
+    if (n < order.quantity) throw Errors.outOfStock();
+    await orderEvent({ orderId, type: "ITEM_ASSIGNED", actorType: "ADMIN", adminId, details: { quantity: order.quantity } }, tx);
+    return n;
   });
-  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.ORDER_UPDATED, resourceType: "order", resourceId: orderId, details: { action: "fulfill", itemId } });
+  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.ORDER_UPDATED, resourceType: "order", resourceId: orderId, details: { action: "fulfill", items: sold } });
   return deliverOrder(orderId);
 }

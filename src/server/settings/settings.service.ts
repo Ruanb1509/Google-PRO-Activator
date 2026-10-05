@@ -56,7 +56,7 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   ],
   brlCountries: ["BR"],
   lowStockThreshold: 10,
-  orderTtlMinutes: 30,
+  orderTtlMinutes: 10,
   maxPendingOrdersPerUser: 3,
   supportContact: "",
   binancePay: {

@@ -14,6 +14,7 @@ interface OrderDetail {
   number: number;
   status: string;
   productName: string;
+  quantity: number;
   currency: string;
   amountCents: number;
   paymentMethod: string;
@@ -42,7 +43,7 @@ interface OrderDetail {
     createdAt: string;
     events: { id: string; eventId: string; eventType: string; signatureValid: boolean; processedAt: string | null; error: string | null; createdAt: string }[];
   } | null;
-  inventoryItem: { id: string; valuePreview: string; status: string; soldAt: string | null } | null;
+  inventoryItems: { id: string; valuePreview: string; status: string; soldAt: string | null }[];
   events: { id: string; type: string; message: string | null; actorType: string; createdAt: string; details: unknown }[];
   ledger: { id: string; type: string; amountCents: number; balanceAfterCents: number; createdAt: string }[];
 }
@@ -56,7 +57,7 @@ export default function OrderDetailPage() {
 
   async function run(kind: "sync" | "resend" | "fulfill" | "refund" | "cancel", success: string) {
     if (kind === "refund" && !confirm("Reembolsar este pedido pelo gateway de pagamento? O item entregue NÃO volta ao estoque.")) return;
-    if (kind === "cancel" && !confirm("Cancelar este pedido? A cobrança é cancelada no provedor e o item reservado volta a ficar disponível.")) return;
+    if (kind === "cancel" && !confirm("Cancelar este pedido? A cobrança é cancelada no provedor e os itens reservados voltam a ficar disponíveis.")) return;
     const r = await action.run(kind, () => api<{ order: OrderDetail }>(`/api/admin/orders/${id}/${kind}`, { method: "POST" }), success);
     if (r?.order) setData(r.order);
     else await reload();
@@ -67,6 +68,8 @@ export default function OrderDetailPage() {
   if (!data) return null;
 
   const paidLike = data.status === "PAID" || data.status === "DELIVERED";
+  const soldItems = data.inventoryItems.filter((i) => i.status === "SOLD");
+  const missingItems = data.quantity - soldItems.length;
 
   return (
     <>
@@ -87,13 +90,13 @@ export default function OrderDetailPage() {
               🔄 Verificar pagamento
             </Button>
           )}
-          {paidLike && data.inventoryItem && (
+          {paidLike && missingItems <= 0 && (
             <Button onClick={() => run("resend", "Entrega reenviada.")} loading={action.busy === "resend"}>
               📨 Reenviar entrega
             </Button>
           )}
-          {data.status === "PAID" && !data.inventoryItem && (
-            <Button variant="primary" onClick={() => run("fulfill", "Item atribuído e entregue.")} loading={action.busy === "fulfill"}>
+          {data.status === "PAID" && missingItems > 0 && (
+            <Button variant="primary" onClick={() => run("fulfill", "Itens atribuídos e entregues.")} loading={action.busy === "fulfill"}>
               📦 Atribuir estoque e entregar
             </Button>
           )}
@@ -111,9 +114,11 @@ export default function OrderDetailPage() {
       )}
       {action.error && <div className="mb-3"><ErrorBox error={action.error} /></div>}
       {action.message && <div className="mb-3"><Notice>{action.message}</Notice></div>}
-      {data.status === "PAID" && !data.inventoryItem && (
+      {data.status === "PAID" && missingItems > 0 && (
         <div className="mb-3">
-          <Notice tone="bad">Pedido pago sem item: o estoque acabou antes da entrega. Reponha o estoque e use “Atribuir estoque e entregar”, ou reembolse.</Notice>
+          <Notice tone="bad">
+            Pedido pago com {missingItems} de {data.quantity} unidade(s) sem item: o estoque acabou antes da entrega. Reponha o estoque e use “Atribuir estoque e entregar”, ou reembolse.
+          </Notice>
         </div>
       )}
       {data.deliveryError && data.status === "PAID" && (
@@ -129,7 +134,8 @@ export default function OrderDetailPage() {
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <Info label="ID" value={<span className="break-all font-mono text-xs">{data.id}</span>} />
             <Info label="Produto" value={<Link className="text-accent hover:underline" href={`/products/${data.product.id}`}>{data.productName}</Link>} />
-            <Info label="Valor" value={money(data.amountCents, data.currency)} />
+            <Info label="Quantidade" value={data.quantity} />
+            <Info label="Valor total" value={money(data.amountCents, data.currency)} />
             <Info label="Moeda" value={data.currency} />
             <Info label="Método" value={data.paymentMethod} />
             <Info label="País" value={data.country ?? "—"} />
@@ -142,24 +148,28 @@ export default function OrderDetailPage() {
           </dl>
         </Card>
 
-        <Card title="Cliente e item">
+        <Card title="Cliente e itens">
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <Info label="Cliente" value={<Link className="text-accent hover:underline" href={`/customers/${data.user.id}`}>{userLabel(data.user)}</Link>} />
             <Info label="Telegram ID" value={<span className="font-mono text-xs">{data.user.telegramId}</span>} />
             <Info
-              label="Item entregue"
+              label={`Itens (${soldItems.length}/${data.quantity})`}
               value={
-                data.inventoryItem ? (
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-xs">{data.inventoryItem.valuePreview}</span>
-                    <InventoryStatusBadge status={data.inventoryItem.status} />
+                data.inventoryItems.length ? (
+                  <span className="flex flex-col gap-1">
+                    {data.inventoryItems.map((it) => (
+                      <span key={it.id} className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs">{it.valuePreview}</span>
+                        <InventoryStatusBadge status={it.status} />
+                      </span>
+                    ))}
                   </span>
                 ) : (
                   "—"
                 )
               }
             />
-            <Info label="Vendido em" value={fmtDate(data.inventoryItem?.soldAt)} />
+            <Info label="Vendido em" value={fmtDate(soldItems[0]?.soldAt)} />
           </dl>
           {data.ledger.length > 0 && (
             <div className="mt-4">

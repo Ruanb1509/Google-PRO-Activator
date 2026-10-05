@@ -66,7 +66,7 @@ tests/                          unitários + integração (Postgres real)
 |---|---|
 | `users` | clientes do Telegram (id, username, nome, idioma, país, **saldo**) |
 | `products` | catálogo; preços em centavos BRL/USD; soft delete |
-| `inventory_items` | um link/código único por linha, **criptografado (AES-256-GCM)**; `value_hash` (HMAC) único global para detectar duplicatas; `order_id` único ⇒ 1 item ↔ 1 pedido |
+| `inventory_items` | um link/código único por linha, **criptografado (AES-256-GCM)**; `value_hash` (HMAC) único global para detectar duplicatas; `order_id` ⇒ um pedido tem `quantity` itens (1 a 10) |
 | `inventory_item_events` | histórico de cada item |
 | `orders` / `order_events` | pedido (número sequencial `#123`) e sua linha do tempo |
 | `payments` | 1:1 com pedido; `idempotency_key` = id do pedido; `(provider, provider_payment_id)` único |
@@ -81,15 +81,19 @@ Garantias extras no banco: `balance_cents >= 0`, preços > 0, item `SOLD`/`RESER
 
 ## Fluxo de compra e proteção contra dupla entrega
 
-1. **Pedido** (`orders.service.createOrder`) — em **uma transação**: cria o pedido `PENDING`, reserva o próximo item
-   (`SELECT … FOR UPDATE SKIP LOCKED`, reserva temporária até `expires_at + 10 min`) e cria o registro de pagamento.
-   Sem estoque ⇒ rollback e `OUT_OF_STOCK`.
+1. **Pedido** (`orders.service.createOrder`) — o cliente escolhe a **quantidade** (1 a 10, limitada ao estoque) e o valor é
+   `preço × quantidade`. Em **uma transação**: cria o pedido `PENDING`, reserva os próximos `quantidade` itens
+   (`SELECT … FOR UPDATE SKIP LOCKED`, reserva temporária até `expires_at` — padrão **10 min**, "Validade do pedido" nas
+   Configurações) e cria o registro de pagamento. Estoque insuficiente ⇒ rollback e `OUT_OF_STOCK` (nada fica reservado).
+   Provedores que exigem cobranças mais longas (PIX/Stripe ≥ 30 min) recebem esse prazo mínimo, mas a reserva vence em
+   10 min e a manutenção cancela a cobrança no provedor; um pagamento que ainda chegue é tratado como pagamento tardio.
 2. **Cobrança** no provedor com chave de idempotência = id do pedido (PIX QR/copia e cola, checkout Stripe, débito de saldo).
 3. **Webhook** (`webhook.service.processWebhook`): valida a assinatura → grava o evento (único) → **consulta o status oficial na API do provedor** (o conteúdo do webhook e o que o cliente diz nunca bastam) → aplica.
 4. **Aplicação do status** (`payment-lifecycle.applyPaymentStatus`) em **uma transação** com `SELECT … FOR UPDATE` no pedido:
-   confere valor/moeda, `RESERVED → SOLD` (ou pega outro item livre se a reserva caiu), vincula ao pedido, grava eventos/auditoria. Idempotente.
+   confere valor/moeda, `RESERVED → SOLD` para todas as unidades (pega itens livres para as que perderam a reserva), vincula ao pedido, grava eventos/auditoria. Idempotente.
+   Se faltar estoque para alguma unidade, o pedido fica `PAID` sem entrega até o admin usar "Atribuir estoque e entregar" (ou reembolsar).
 5. **Entrega** (`delivery.service.deliverOrder`): lease no banco evita envio duplo; mensagem no idioma do cliente; `DELIVERED`.
-   Falhas são registradas e reprocessadas pela manutenção; o item fica **permanentemente** associado ao pedido e visível em "Meus pedidos".
+   Falhas são registradas e reprocessadas pela manutenção; todos os links vão numa única mensagem e ficam **permanentemente** associados ao pedido e visível em "Meus pedidos".
 6. **Manutenção**: reconcilia pedidos pendentes com o provedor (recupera webhooks perdidos), expira pedidos (cancelando o checkout no provedor), libera reservas vencidas, reenvia entregas, expira depósitos, limpa sessões.
 
 Estados: pagamento `PENDING | PAID | FAILED | EXPIRED | REFUNDED | CANCELLED`; pedido acrescenta `DELIVERED`.

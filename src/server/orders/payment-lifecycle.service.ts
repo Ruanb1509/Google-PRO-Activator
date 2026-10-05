@@ -4,7 +4,7 @@ import { logger } from "@/server/common/logger";
 import { escapeHtml, t } from "@/i18n";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { orderEvent } from "@/server/orders/order-events";
-import { releaseReservation, returnUndeliveredItem, sellForOrder } from "@/server/inventory/inventory.service";
+import { releaseReservation, returnUndeliveredItems, sellForOrder } from "@/server/inventory/inventory.service";
 import { deliverOrder } from "@/server/notifications/delivery.service";
 import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
 import { availableStock } from "@/server/products/products.service";
@@ -13,7 +13,7 @@ import type { PaymentStatusResult } from "@/server/payments/payment-provider";
 
 type Outcome =
   | { kind: "noop" }
-  | { kind: "paid"; orderId: string; itemAssigned: boolean; productId: string }
+  | { kind: "paid"; orderId: string; fullyAssigned: boolean; productId: string }
   | { kind: "closed"; orderId: string; status: PaymentStatus }
   | { kind: "refunded"; orderId: string }
   | { kind: "mismatch"; orderId: string };
@@ -26,7 +26,7 @@ async function lockOrder(tx: Tx, orderId: string): Promise<void> {
 /**
  * Applies an AUTHORITATIVE payment status (fetched from the provider API after a verified webhook,
  * reconciliation, or the internal balance ledger). Fully idempotent: duplicate or out-of-order
- * notifications are no-ops. The inventory item is sold in the same DB transaction (commit or rollback).
+ * notifications are no-ops. The inventory items are sold in the same DB transaction (commit or rollback).
  */
 export async function applyPaymentStatus(paymentId: string, result: PaymentStatusResult, actor: { actorType: ActorType; adminId?: string }): Promise<Outcome> {
   const outcome = await db().$transaction(async (tx): Promise<Outcome> => {
@@ -58,13 +58,13 @@ export async function applyPaymentStatus(paymentId: string, result: PaymentStatu
           where: { id: payment.id },
           data: { status: "PAID", paidAt: now, country, providerReference: result.providerReference ?? payment.providerReference },
         });
-        const itemId = await sellForOrder(tx, { productId: order.productId, orderId: order.id, userId: order.userId });
+        const sold = await sellForOrder(tx, { productId: order.productId, orderId: order.id, userId: order.userId, quantity: order.quantity });
         await tx.order.update({ where: { id: order.id }, data: { status: "PAID", paidAt: now, country: country ?? order.country } });
         if (country) await tx.user.update({ where: { id: order.userId }, data: { country } });
         await orderEvent({ orderId: order.id, type: "PAYMENT_CONFIRMED", actorType: actor.actorType, adminId: actor.adminId, details: { provider: payment.provider, providerPaymentId: payment.providerPaymentId, lateAfterStatus: order.status !== "PENDING" ? order.status : null } }, tx);
-        if (!itemId) await orderEvent({ orderId: order.id, type: "OUT_OF_STOCK_AFTER_PAYMENT", actorType: "SYSTEM" }, tx);
-        await audit({ actorType: actor.actorType, adminId: actor.adminId, action: AuditActions.SALE, resourceType: "order", resourceId: order.id, details: { number: order.number, amountCents: order.amountCents, currency: order.currency, provider: payment.provider, itemId } }, tx);
-        return { kind: "paid", orderId: order.id, itemAssigned: Boolean(itemId), productId: order.productId };
+        if (sold < order.quantity) await orderEvent({ orderId: order.id, type: "OUT_OF_STOCK_AFTER_PAYMENT", actorType: "SYSTEM", details: { quantity: order.quantity, assigned: sold } }, tx);
+        await audit({ actorType: actor.actorType, adminId: actor.adminId, action: AuditActions.SALE, resourceType: "order", resourceId: order.id, details: { number: order.number, quantity: order.quantity, amountCents: order.amountCents, currency: order.currency, provider: payment.provider, itemsAssigned: sold } }, tx);
+        return { kind: "paid", orderId: order.id, fullyAssigned: sold >= order.quantity, productId: order.productId };
       }
 
       case "FAILED":
@@ -101,27 +101,28 @@ export function itemMayHaveBeenSeen(order: { deliveredAt: Date | null; deliveryA
   return order.deliveredAt !== null || order.deliveryAttempts > 0;
 }
 
-/** Refund bookkeeping: the item goes back to stock ONLY if it was never delivered to the customer. */
+/** Refund bookkeeping: the items go back to stock ONLY if they were never delivered to the customer. */
 export async function markRefunded(tx: Tx, args: { orderId: string; paymentId: string; delivered: boolean; actor: { actorType: ActorType; adminId?: string } }): Promise<void> {
   await tx.payment.update({ where: { id: args.paymentId }, data: { status: "REFUNDED" } });
   await tx.order.update({ where: { id: args.orderId }, data: { status: "REFUNDED", refundedAt: new Date() } });
   await releaseReservation(tx, args.orderId, "refunded");
-  const returned = args.delivered ? false : await returnUndeliveredItem(tx, args.orderId);
-  await orderEvent({ orderId: args.orderId, type: "REFUNDED", actorType: args.actor.actorType, adminId: args.actor.adminId, details: { itemReturnedToStock: returned } }, tx);
-  await audit({ actorType: args.actor.actorType, adminId: args.actor.adminId, action: AuditActions.ORDER_REFUNDED, resourceType: "order", resourceId: args.orderId, details: { itemReturnedToStock: returned } }, tx);
+  const returned = args.delivered ? 0 : await returnUndeliveredItems(tx, args.orderId);
+  await orderEvent({ orderId: args.orderId, type: "REFUNDED", actorType: args.actor.actorType, adminId: args.actor.adminId, details: { itemsReturnedToStock: returned } }, tx);
+  await audit({ actorType: args.actor.actorType, adminId: args.actor.adminId, action: AuditActions.ORDER_REFUNDED, resourceType: "order", resourceId: args.orderId, details: { itemsReturnedToStock: returned } }, tx);
 }
 
 async function afterCommit(outcome: Outcome): Promise<void> {
   try {
     if (outcome.kind === "paid") {
-      if (outcome.itemAssigned) {
+      if (outcome.fullyAssigned) {
         await deliverOrder(outcome.orderId);
         await checkLowStock(outcome.productId);
       } else {
         const order = await db().order.findUniqueOrThrow({ where: { id: outcome.orderId }, include: { user: true } });
         const locale = order.user.locale ?? order.locale;
         await sendHtml(order.user.telegramId, t(locale, "paid_out_of_stock", { number: order.number })).catch(() => undefined);
-        await alertAdmins(`🚨 Pedido <b>#${order.number}</b> foi PAGO mas o produto <b>${escapeHtml(order.productName)}</b> está sem estoque. Reponha o estoque e reenvie a entrega, ou reembolse.`);
+        const assigned = await db().inventoryItem.count({ where: { orderId: order.id, status: "SOLD" } });
+        await alertAdmins(`🚨 Pedido <b>#${order.number}</b> foi PAGO mas o produto <b>${escapeHtml(order.productName)}</b> está sem estoque (${assigned}/${order.quantity} unidades atribuídas). Reponha o estoque e use “Atribuir estoque e entregar”, ou reembolse.`);
       }
     } else if (outcome.kind === "refunded") {
       const order = await db().order.findUniqueOrThrow({ where: { id: outcome.orderId }, include: { user: true } });

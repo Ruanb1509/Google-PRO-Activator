@@ -19,13 +19,19 @@ export function escapeHtml(value: string): string {
 
 /**
  * Translate a key. Variables are HTML-escaped (bot messages use parse_mode HTML), so user-controlled
- * content (product names, codes) can never inject markup.
+ * content (product names, codes) can never inject markup. `rawHtml` is for markup the caller already
+ * built from escaped values (e.g. a list of delivered links); it is inserted as-is.
  */
-export function t(locale: Locale, key: MessageKey, vars: Record<string, string | number> = {}): string {
+export function t(locale: Locale, key: MessageKey, vars: Record<string, string | number> = {}, rawHtml: Record<string, string> = {}): string {
   const template = dictionaries[locale]?.[key] ?? dictionaries[DEFAULT_LOCALE][key] ?? key;
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>
-    name in vars ? escapeHtml(String(vars[name])) : match,
+    name in rawHtml ? rawHtml[name]! : name in vars ? escapeHtml(String(vars[name])) : match,
   );
+}
+
+/** Delivered links/codes as HTML, one per line (numbered when there are several), each tap-to-copy. */
+export function formatItems(values: string[]): string {
+  return values.map((v, i) => (values.length > 1 ? `${i + 1}. ` : "") + `<code>${escapeHtml(v)}</code>`).join("\n");
 }
 
 /** Maps Telegram's `language_code` (e.g. "pt", "pt-br", "en") to a supported locale. */

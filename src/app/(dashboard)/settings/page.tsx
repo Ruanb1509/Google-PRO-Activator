@@ -226,7 +226,7 @@ export default function SettingsPage() {
             <Field label="Estoque baixo" hint="Alerta quando estoque < N (padrão para todos os produtos)">
               <input className="input" type="number" min={0} value={s.lowStockThreshold} onChange={(e) => update({ lowStockThreshold: Number(e.target.value) })} />
             </Field>
-            <Field label="Validade do pedido (minutos)" hint="Tempo para pagar antes da reserva expirar">
+            <Field label="Validade do pedido (minutos)" hint="Tempo para pagar; depois disso os links reservados voltam ao estoque (padrão 10)">
               <input className="input" type="number" min={5} max={1440} value={s.orderTtlMinutes} onChange={(e) => update({ orderTtlMinutes: Number(e.target.value) })} />
             </Field>
             <Field label="Máx. pedidos pendentes por cliente">

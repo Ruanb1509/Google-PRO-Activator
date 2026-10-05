@@ -7,10 +7,10 @@ import { AppError } from "@/server/common/errors";
 import { logger } from "@/server/common/logger";
 import { formatMoney, parseMoneyToCents } from "@/server/common/money";
 import { rateLimit } from "@/server/common/rate-limit";
-import { allTranslations, detectLocale, t, type MessageKey } from "@/i18n";
+import { allTranslations, detectLocale, formatItems, t, type MessageKey } from "@/i18n";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
 import { availableStock, listProducts, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
-import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, syncOrderPayment } from "@/server/orders/orders.service";
+import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, MAX_QUANTITY_PER_ORDER, syncOrderPayment } from "@/server/orders/orders.service";
 import { getSettings } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, DepositError, type DepositErrorCode } from "@/server/wallet/deposit.service";
@@ -107,16 +107,9 @@ async function showProduct(ctx: StoreContext, productId: string) {
     return ctx.reply(`${text}\n\n${ctx.tr("out_of_stock")}`, { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, product.id, subscribed) });
   }
 
-  const methods = await availablePaymentMethods(ctx.locale);
-  if (!methods.length) return ctx.reply(`${text}\n\n${ctx.tr("no_payment_methods")}`, { parse_mode: "HTML" });
-  const kb = new InlineKeyboard();
-  for (const m of methods) {
-    const price = m.currency === "BRL" ? product.priceBrlCents : product.priceUsdCents;
-    const label = ctx.locale === "pt_BR" ? m.labelPt : m.labelEn;
-    kb.text(`${label} — ${formatMoney(price, m.currency, ctx.locale)}`, `pay:${product.id}:${m.key}`).row();
-  }
-  kb.text(ctx.tr("back"), "menu:buy");
-  const body = `${text}\n\n${ctx.tr("choose_payment")}`;
+  if (!(await availablePaymentMethods(ctx.locale)).length) return ctx.reply(`${text}\n\n${ctx.tr("no_payment_methods")}`, { parse_mode: "HTML" });
+  const kb = quantityKeyboard(ctx, product.id, stock);
+  const body = `${text}\n\n${ctx.tr("choose_quantity")}`;
   const logo = productLogoUrl(product, true);
   if (logo) {
     try {
@@ -130,16 +123,49 @@ async function showProduct(ctx: StoreContext, productId: string) {
   await ctx.reply(body, { parse_mode: "HTML", reply_markup: kb });
 }
 
+/** 1..N units (capped by stock and by the per-order limit), five per row. */
+function quantityKeyboard(ctx: StoreContext, productId: string, stock: number) {
+  const kb = new InlineKeyboard();
+  const max = Math.min(stock, MAX_QUANTITY_PER_ORDER);
+  for (let q = 1; q <= max; q++) {
+    kb.text(ctx.tr("quantity_button", { quantity: q }), `qty:${productId}:${q}`);
+    if (q % 5 === 0 && q < max) kb.row();
+  }
+  return kb.row().text(ctx.tr("back"), "menu:buy");
+}
+
+/** After the quantity is chosen: payment methods with the total for that quantity. */
+async function showPaymentMethods(ctx: StoreContext, productId: string, quantity: number) {
+  const product = await db().product.findFirst({ where: { id: productId, isActive: true, deletedAt: null } });
+  if (!product) return ctx.reply(ctx.tr("no_products"));
+  const stock = await availableStock(product.id);
+  if (stock <= 0) return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, product.id, await hasStockAlert(ctx.user.id, product.id)) });
+  if (stock < quantity) return ctx.reply(ctx.tr("not_enough_stock", { stock }), { parse_mode: "HTML", reply_markup: quantityKeyboard(ctx, product.id, stock) });
+
+  const methods = await availablePaymentMethods(ctx.locale);
+  if (!methods.length) return ctx.reply(ctx.tr("no_payment_methods"));
+  const kb = new InlineKeyboard();
+  for (const m of methods) {
+    const total = (m.currency === "BRL" ? product.priceBrlCents : product.priceUsdCents) * quantity;
+    const label = ctx.locale === "pt_BR" ? m.labelPt : m.labelEn;
+    kb.text(`${label} — ${formatMoney(total, m.currency, ctx.locale)}`, `pay:${product.id}:${quantity}:${m.key}`).row();
+  }
+  kb.text(ctx.tr("back"), `p:${product.id}`);
+  const summary = ctx.tr("quantity_summary", { product: localizedName(product, ctx.locale), quantity });
+  await ctx.reply(`${summary}\n\n${ctx.tr("choose_payment")}`, { parse_mode: "HTML", reply_markup: kb });
+}
+
 function stockAlertKeyboard(ctx: StoreContext, productId: string, subscribed: boolean) {
   return new InlineKeyboard().text(ctx.tr(subscribed ? "notify_me_on" : "notify_me"), `ntf:${productId}`).row().text(ctx.tr("back"), "menu:buy");
 }
 
-async function startCheckout(ctx: StoreContext, productId: string, methodKey: string) {
+async function startCheckout(ctx: StoreContext, productId: string, methodKey: string, quantity: number) {
   try {
-    const order = await createOrder(ctx.user, productId, methodKey);
+    const order = await createOrder(ctx.user, productId, methodKey, quantity);
     const header = ctx.tr("order_created", {
       number: order.number,
       product: order.productName,
+      quantity: order.quantity,
       amount: formatMoney(order.amountCents, order.currency, ctx.locale),
       minutes: Math.max(1, Math.round((order.expiresAt.getTime() - Date.now()) / 60000)),
     });
@@ -168,13 +194,18 @@ async function startCheckout(ctx: StoreContext, productId: string, methodKey: st
       return ctx.reply(
         ctx.tr("insufficient_balance", {
           balance: formatMoney(err.balanceCents, "USD", ctx.locale),
-          price: formatMoney(product?.priceUsdCents ?? 0, "USD", ctx.locale),
+          price: formatMoney((product?.priceUsdCents ?? 0) * quantity, "USD", ctx.locale),
         }),
         { reply_markup: new InlineKeyboard().text(ctx.tr("deposit_button"), "dep:new") },
       );
     }
     if (err instanceof AppError) {
-      if (err.code === "OUT_OF_STOCK") return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, productId, await hasStockAlert(ctx.user.id, productId)) });
+      if (err.code === "OUT_OF_STOCK") {
+        // Fewer units left than requested: offer the quantities still available.
+        const stock = await availableStock(productId);
+        if (stock > 0) return ctx.reply(ctx.tr("not_enough_stock", { stock }), { parse_mode: "HTML", reply_markup: quantityKeyboard(ctx, productId, stock) });
+        return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, productId, await hasStockAlert(ctx.user.id, productId)) });
+      }
       if (err.code === "TOO_MANY_PENDING") return ctx.reply(ctx.tr("too_many_pending"));
       if (err.code === "RATE_LIMITED") return ctx.reply(ctx.tr("too_many_requests"));
       if (err.code === "PAYMENT_PROVIDER_ERROR" || err.code === "METHOD_UNAVAILABLE") return ctx.reply(ctx.tr("payment_error"));
@@ -188,7 +219,8 @@ async function showOrders(ctx: StoreContext) {
   if (!orders.length) return ctx.reply(ctx.tr("orders_empty"));
   const kb = new InlineKeyboard();
   for (const o of orders) {
-    kb.text(t(ctx.locale, "order_button", { number: o.number, product: o.productName.slice(0, 24), status: t(ctx.locale, `status_${o.status}` as MessageKey) }), `o:${o.id}`).row();
+    const product = `${o.quantity > 1 ? `${o.quantity}x ` : ""}${o.productName}`.slice(0, 24);
+    kb.text(t(ctx.locale, "order_button", { number: o.number, product, status: t(ctx.locale, `status_${o.status}` as MessageKey) }), `o:${o.id}`).row();
   }
   await ctx.reply(ctx.tr("orders_title"), { parse_mode: "HTML", reply_markup: kb });
 }
@@ -196,16 +228,17 @@ async function showOrders(ctx: StoreContext) {
 async function showOrder(ctx: StoreContext, orderId: string) {
   const found = await getUserOrder(ctx.user.id, orderId);
   if (!found) return ctx.reply(ctx.tr("orders_empty"));
-  const { order, item } = found;
+  const { order, items } = found;
   let text = ctx.tr("order_details", {
     number: order.number,
     product: order.productName,
+    quantity: order.quantity,
     amount: formatMoney(order.amountCents, order.currency, ctx.locale),
     method: order.paymentMethod,
     status: ctx.tr(`status_${order.status}` as MessageKey),
     date: order.createdAt.toLocaleString(ctx.locale === "pt_BR" ? "pt-BR" : "en-US", { timeZone: "America/Sao_Paulo" }),
   });
-  if (item) text += ctx.tr("order_access", { item });
+  if (items.length) text += t(ctx.locale, "order_access", {}, { items: formatItems(items) });
   const kb = new InlineKeyboard();
   if (order.status === "PENDING") {
     if (order.payment?.checkoutUrl && !order.payment.pixCopyPaste) kb.url(ctx.tr("pay_button"), order.payment.checkoutUrl).row();
@@ -417,9 +450,22 @@ export function createBot(): Bot<StoreContext> {
     await ctx.answerCallbackQuery({ text: ctx.tr(on ? "notify_me_subscribed" : "notify_me_cancelled") });
     await ctx.editMessageReplyMarkup({ reply_markup: stockAlertKeyboard(ctx, productId, on) }).catch(() => undefined);
   });
+  bot.callbackQuery(/^qty:(\w+):(\d{1,2})$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const quantity = Number(ctx.match[2]);
+    if (quantity < 1 || quantity > MAX_QUANTITY_PER_ORDER) return;
+    await showPaymentMethods(ctx, ctx.match[1]!, quantity);
+  });
+  bot.callbackQuery(/^pay:(\w+):(\d{1,2}):([a-z0-9_]+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const quantity = Number(ctx.match[2]);
+    if (quantity < 1 || quantity > MAX_QUANTITY_PER_ORDER) return;
+    await startCheckout(ctx, ctx.match[1]!, ctx.match[3]!, quantity);
+  });
+  // Buttons sent before quantities existed (no quantity in the data) buy a single unit.
   bot.callbackQuery(/^pay:(\w+):([a-z0-9_]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    await startCheckout(ctx, ctx.match[1]!, ctx.match[2]!);
+    await startCheckout(ctx, ctx.match[1]!, ctx.match[2]!, 1);
   });
   bot.callbackQuery(/^st:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();

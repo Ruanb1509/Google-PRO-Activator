@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { maskValue, parseInventoryText } from "@/server/inventory/inventory.parser";
 import { formatMoney, parseMoneyToCents } from "@/server/common/money";
-import { detectLocale, dictionary, t } from "@/i18n";
+import { detectLocale, dictionary, formatItems, t } from "@/i18n";
 
 describe("inventory parser", () => {
   it("parses one item per line, ignoring blanks and in-text duplicates", () => {
@@ -53,9 +53,17 @@ describe("i18n", () => {
 
   it("interpolates and escapes HTML in variables", () => {
     expect(t("pt_BR", "order_cancelled", { number: 42 })).toBe("Pedido #42 cancelado.");
-    const html = t("en_US", "payment_confirmed", { product: "<b>x</b>", item: "a&b", number: 1 });
+    const html = t("en_US", "payment_confirmed", { product: "<b>x</b>", quantity: 1, number: 1 }, { items: formatItems(["a&b"]) });
     expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
     expect(html).toContain("<code>a&amp;b</code>");
+  });
+
+  it("lists every delivered item, escaped, one per line", () => {
+    expect(formatItems(["L1"])).toBe("<code>L1</code>");
+    expect(formatItems(["L1", "<L2>"])).toBe("1. <code>L1</code>\n2. <code>&lt;L2&gt;</code>");
+    const html = t("pt_BR", "payment_confirmed", { product: "{items}", quantity: 2, number: 3 }, { items: formatItems(["L1", "L2"]) });
+    expect(html).toContain("{items} (x2)"); // placeholders inside variables are not expanded
+    expect(html).toContain("1. <code>L1</code>\n2. <code>L2</code>");
   });
 
   it("detects locale from Telegram language_code", () => {
@@ -66,7 +74,7 @@ describe("i18n", () => {
   });
 
   it("uses the exact delivery message from the specification", () => {
-    const pt = t("pt_BR", "payment_confirmed", { product: "Serviço Digital X", item: "LINK-001", number: 7 });
+    const pt = t("pt_BR", "payment_confirmed", { product: "Serviço Digital X", quantity: 1, number: 7 }, { items: formatItems(["LINK-001"]) });
     expect(pt).toContain("Pagamento confirmado!");
     expect(pt).toContain("Seu pedido foi processado.");
     expect(pt).toContain("#7");

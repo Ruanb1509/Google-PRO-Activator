@@ -1,7 +1,7 @@
 import { db } from "@/server/common/db";
 import { decrypt } from "@/server/common/crypto";
 import { logger } from "@/server/common/logger";
-import { t, escapeHtml } from "@/i18n";
+import { t, escapeHtml, formatItems } from "@/i18n";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { orderEvent } from "@/server/orders/order-events";
 import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
@@ -12,7 +12,7 @@ const MAX_ATTEMPTS = 8;
 export type DeliveryOutcome = "delivered" | "skipped" | "failed";
 
 /**
- * Sends the purchased item to the customer. The item was already bound to the order (SOLD) in the
+ * Sends the purchased items to the customer. The items were already bound to the order (SOLD) in the
  * payment transaction; this step only notifies. A short DB lease prevents two concurrent senders
  * (webhook retry + cron) from sending the same message twice.
  */
@@ -30,21 +30,23 @@ export async function deliverOrder(orderId: string, opts: { resend?: boolean; ad
 
   const order = await db().order.findUniqueOrThrow({
     where: { id: orderId },
-    include: { user: true, product: true, inventoryItem: true },
+    include: { user: true, product: true, inventoryItems: { where: { status: "SOLD" }, orderBy: { createdAt: "asc" } } },
   });
-  const item = order.inventoryItem;
-  if (!item || item.status !== "SOLD") {
+  const items = order.inventoryItems;
+  // Only deliver once every unit is assigned (a paid order that ran out of stock waits for an admin).
+  if (items.length < order.quantity) {
     await db().order.update({ where: { id: orderId }, data: { deliveryLockedUntil: null, deliveryError: "NO_ITEM" } });
     return "skipped";
   }
 
   const locale = order.user.locale ?? order.locale;
   try {
-    const html = t(locale, "payment_confirmed", {
-      product: localizedName(order.product, locale),
-      item: decrypt(item.valueEncrypted),
-      number: order.number,
-    });
+    const html = t(
+      locale,
+      "payment_confirmed",
+      { product: localizedName(order.product, locale), quantity: order.quantity, number: order.number },
+      { items: formatItems(items.map((i) => decrypt(i.valueEncrypted))) },
+    );
     await sendHtml(order.user.telegramId, html);
     await db().order.updateMany({
       where: { id: orderId, status: { in: ["PAID", "DELIVERED"] } },
@@ -74,14 +76,17 @@ export async function retryPendingDeliveries(limit = 20): Promise<number> {
     where: {
       status: "PAID",
       deliveryAttempts: { lt: MAX_ATTEMPTS },
-      inventoryItem: { is: { status: "SOLD" } },
+      inventoryItems: { some: { status: "SOLD" } },
       OR: [{ deliveryLockedUntil: null }, { deliveryLockedUntil: { lt: new Date() } }],
     },
     orderBy: { paidAt: "asc" },
     take: limit,
-    select: { id: true },
+    select: { id: true, quantity: true, _count: { select: { inventoryItems: { where: { status: "SOLD" } } } } },
   });
   let delivered = 0;
-  for (const o of orders) if ((await deliverOrder(o.id)) === "delivered") delivered++;
+  for (const o of orders) {
+    if (o._count.inventoryItems < o.quantity) continue; // still missing stock
+    if ((await deliverOrder(o.id)) === "delivered") delivered++;
+  }
   return delivered;
 }
