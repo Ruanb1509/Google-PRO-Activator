@@ -16,6 +16,7 @@ interface AddResult {
   invalid: number;
   duplicateValues: string[];
   invalidLines: { line: number; value: string; reason: string }[];
+  ignored: number;
 }
 
 const REASONS: Record<string, string> = { too_long: "muito longo", control_characters: "caracteres inválidos" };
@@ -149,7 +150,7 @@ function AddStockPanel({ productId, onAdded }: { productId: string; onAdded: () 
     <Card title={<span id="estoque">Adicionar ao estoque</span>}>
       <div className="space-y-3">
         <label className="block">
-          <span className="label">Insira os links/códigos, um por linha</span>
+          <span className="label">Insira os links/códigos, um por linha — ou cole o pedido do fornecedor inteiro (só os links são importados)</span>
           <textarea
             className="input min-h-48 font-mono text-xs"
             placeholder={"LINK-001\nLINK-002\nLINK-003"}
@@ -182,6 +183,7 @@ function AddStockPanel({ productId, onAdded }: { productId: string; onAdded: () 
           <div className="space-y-2">
             <Notice tone={result.added > 0 ? "ok" : "warn"}>
               <b>{result.added}</b> itens adicionados · <b>{result.duplicates}</b> duplicados · <b>{result.invalid}</b> inválidos
+              {result.ignored > 0 && <> · <b>{result.ignored}</b> linhas do pedido do fornecedor ignoradas</>}
             </Notice>
             {result.duplicateValues.length > 0 && (
               <details className="text-sm">

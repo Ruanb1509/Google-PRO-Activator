@@ -238,7 +238,7 @@ async function showOrder(ctx: StoreContext, orderId: string) {
     status: ctx.tr(`status_${order.status}` as MessageKey),
     date: order.createdAt.toLocaleString(ctx.locale === "pt_BR" ? "pt-BR" : "en-US", { timeZone: "America/Sao_Paulo" }),
   });
-  if (items.length) text += t(ctx.locale, "order_access", {}, { items: formatItems(items) });
+  if (items.length) text += t(ctx.locale, "order_access", {}, { items: formatItems(items, ctx.locale) });
   const kb = new InlineKeyboard();
   if (order.status === "PENDING") {
     if (order.payment?.checkoutUrl && !order.payment.pixCopyPaste) kb.url(ctx.tr("pay_button"), order.payment.checkoutUrl).row();

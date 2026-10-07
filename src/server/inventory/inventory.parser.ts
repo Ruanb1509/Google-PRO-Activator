@@ -8,10 +8,25 @@ export interface ParsedItems {
   invalid: { line: number; value: string; reason: string }[];
   /** Duplicates inside the submitted text itself. */
   duplicatesInInput: string[];
+  /** Lines without a link skipped from a supplier export (header, product, price, order code...). */
+  ignored: number;
 }
 
 // Control characters (except tab which is handled by CSV splitting) are never valid in a link/code.
 const CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F]/;
+
+const URL_IN_LINE = /https?:\/\/[^\s"'<>]+/i;
+
+/**
+ * Supplier order exports list the links after an index ("1,https://...") below a block of order
+ * details ("Product,...", "Price,...", "#,Content"). Only the links of such a text are kept.
+ */
+function isSupplierExport(lines: string[]): boolean {
+  return lines.some((l) => {
+    const m = URL_IN_LINE.exec(l);
+    return m !== null && m.index > 0 && /^\s*"?\d+"?\s*[,;\t]/.test(l);
+  });
+}
 
 function firstCsvColumn(line: string): string {
   const trimmed = line.trim();
@@ -27,10 +42,22 @@ function firstCsvColumn(line: string): string {
 export function parseInventoryText(text: string, opts: { csv?: boolean } = {}): ParsedItems {
   const lines = text.replace(/^﻿/, "").split(/\r?\n/);
   const seen = new Set<string>();
-  const out: ParsedItems = { valid: [], invalid: [], duplicatesInInput: [] };
+  const out: ParsedItems = { valid: [], invalid: [], duplicatesInInput: [], ignored: 0 };
+  const supplierExport = isSupplierExport(lines);
 
   lines.forEach((raw, idx) => {
-    const value = opts.csv ? firstCsvColumn(raw) : raw.trim();
+    let value: string;
+    if (supplierExport) {
+      if (!raw.trim()) return;
+      const url = URL_IN_LINE.exec(raw);
+      if (!url) {
+        out.ignored++;
+        return;
+      }
+      value = url[0].replace(/[,;]+$/, "");
+    } else {
+      value = opts.csv ? firstCsvColumn(raw) : raw.trim();
+    }
     if (!value) return; // blank lines are ignored
     if (opts.csv && idx === 0 && /^(value|code|link|codigo|código|item)s?$/i.test(value)) return; // header
     if (value.length > MAX_ITEM_LENGTH) {

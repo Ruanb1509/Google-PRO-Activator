@@ -23,6 +23,19 @@ describe("inventory parser", () => {
     expect(r.valid).toEqual(["ABC-1", "ABC-2", "https://x.com/a?b=1,c=2"]);
   });
 
+  it("keeps only the links of a supplier order export", () => {
+    const text =
+      "Field,Value\nProduct,Gemini Pro por 18 meses\nPrice,1.15 USDT\nOrderCode,FGC5QAHS2\nQuantity,2\nTotal,2.30 USDT\n\n#,Content\n" +
+      "1,https://serviceactivation.in/subscription/new/ESIA3ayXCicv\n2,https://serviceactivation.in/subscription/new/TXTaH12tDSGY\n";
+    const links = ["https://serviceactivation.in/subscription/new/ESIA3ayXCicv", "https://serviceactivation.in/subscription/new/TXTaH12tDSGY"];
+    for (const csv of [true, false]) {
+      const r = parseInventoryText(text, { csv });
+      expect(r.valid).toEqual(links);
+      expect(r.ignored).toBe(7);
+      expect(r.invalid).toEqual([]);
+    }
+  });
+
   it("masks values", () => {
     expect(maskValue("https://example.com/invite/ABCDEFGH")).toBe("https://example.com••••EFGH");
     expect(maskValue("ABCD-EFGH-IJKL")).toBe("••••JKL");
@@ -60,10 +73,11 @@ describe("i18n", () => {
 
   it("lists every delivered item, escaped, one per line", () => {
     expect(formatItems(["L1"])).toBe("<code>L1</code>");
-    expect(formatItems(["L1", "<L2>"])).toBe("1. <code>L1</code>\n2. <code>&lt;L2&gt;</code>");
-    const html = t("pt_BR", "payment_confirmed", { product: "{items}", quantity: 2, number: 3 }, { items: formatItems(["L1", "L2"]) });
+    expect(formatItems(["L1", "<L2>"], "pt_BR")).toBe("<b>Código 1:</b>\n<code>L1</code>\n\n<b>Código 2:</b>\n<code>&lt;L2&gt;</code>");
+    expect(formatItems(["https://a.com/1", "https://a.com/2"], "en_US")).toBe("<b>Link 1:</b>\n<code>https://a.com/1</code>\n\n<b>Link 2:</b>\n<code>https://a.com/2</code>");
+    const html = t("pt_BR", "payment_confirmed", { product: "{items}", quantity: 2, number: 3 }, { items: formatItems(["L1", "L2"], "pt_BR") });
     expect(html).toContain("{items} (x2)"); // placeholders inside variables are not expanded
-    expect(html).toContain("1. <code>L1</code>\n2. <code>L2</code>");
+    expect(html).toContain("<b>Código 1:</b>\n<code>L1</code>\n\n<b>Código 2:</b>\n<code>L2</code>");
   });
 
   it("detects locale from Telegram language_code", () => {

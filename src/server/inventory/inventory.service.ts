@@ -13,6 +13,8 @@ export interface AddItemsResult {
   added: number;
   duplicates: number;
   invalid: number;
+  /** Non-link lines skipped from a supplier export. */
+  ignored: number;
   duplicateValues: string[];
   invalidLines: { line: number; value: string; reason: string }[];
   batchId: string;
@@ -68,6 +70,7 @@ export async function addItems(input: { productId: string; text: string; csv?: b
     added,
     duplicates: duplicateValues.length + (fresh.length - added),
     invalid: parsed.invalid.length,
+    ignored: parsed.ignored,
     duplicateValues: duplicateValues.slice(0, 100).map(maskValue),
     invalidLines: parsed.invalid.slice(0, 100),
     batchId,

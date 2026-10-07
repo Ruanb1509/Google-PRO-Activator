@@ -45,7 +45,7 @@ export async function deliverOrder(orderId: string, opts: { resend?: boolean; ad
       locale,
       "payment_confirmed",
       { product: localizedName(order.product, locale), quantity: order.quantity, number: order.number },
-      { items: formatItems(items.map((i) => decrypt(i.valueEncrypted))) },
+      { items: formatItems(items.map((i) => decrypt(i.valueEncrypted)), locale) },
     );
     await sendHtml(order.user.telegramId, html);
     await db().order.updateMany({
