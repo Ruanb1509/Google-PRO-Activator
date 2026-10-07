@@ -5,26 +5,30 @@ import { openTicketsCount } from "@/server/support/support.service";
 
 const PAID = ["PAID", "DELIVERED"] as const;
 
+// Days start at midnight in Brasília (UTC-3; Brazil has no DST since 2019), not UTC midnight.
+const BRT_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/** Start of the Brasília day `n` days ago, as a UTC instant. */
 function daysAgo(n: number): Date {
-  const d = new Date();
+  const d = new Date(Date.now() - BRT_OFFSET_MS);
   d.setUTCHours(0, 0, 0, 0);
   d.setUTCDate(d.getUTCDate() - n);
-  return d;
+  return new Date(d.getTime() + BRT_OFFSET_MS);
 }
 
 export async function dashboardStats() {
   const today = daysAgo(0);
-  const [totals, byCurrency, todayCount, last7, last30, pending, paid, products, daily, top, regions, settings] = await Promise.all([
+  const [totals, byCurrency, todayByCurrency, last7, last30, pending, paid, products, daily, top, regions, settings] = await Promise.all([
     db().order.count({ where: { status: { in: [...PAID] } } }),
     db().order.groupBy({ by: ["currency"], where: { status: { in: [...PAID] } }, _sum: { amountCents: true }, _count: { _all: true } }),
-    db().order.count({ where: { status: { in: [...PAID] }, paidAt: { gte: today } } }),
+    db().order.groupBy({ by: ["currency"], where: { status: { in: [...PAID] }, paidAt: { gte: today } }, _sum: { amountCents: true }, _count: { _all: true } }),
     db().order.count({ where: { status: { in: [...PAID] }, paidAt: { gte: daysAgo(6) } } }),
     db().order.count({ where: { status: { in: [...PAID] }, paidAt: { gte: daysAgo(29) } } }),
     db().order.count({ where: { status: "PENDING", expiresAt: { gt: new Date() } } }),
     db().order.count({ where: { status: "PAID" } }), // paid, awaiting delivery
     listProducts({ includeInactive: true }),
     db().$queryRaw<{ day: Date; orders: bigint; brl: bigint | null; usd: bigint | null }[]>`
-      SELECT date_trunc('day', paid_at) AS day,
+      SELECT date_trunc('day', paid_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo') AS day,
              count(*) AS orders,
              sum(amount_cents) FILTER (WHERE currency = 'BRL') AS brl,
              sum(amount_cents) FILTER (WHERE currency = 'USD') AS usd
@@ -66,7 +70,9 @@ export async function dashboardStats() {
     totalSales: totals,
     revenueBrlCents: byCurrency.find((c) => c.currency === "BRL")?._sum.amountCents ?? 0,
     revenueUsdCents: byCurrency.find((c) => c.currency === "USD")?._sum.amountCents ?? 0,
-    salesToday: todayCount,
+    salesToday: todayByCurrency.reduce((n, c) => n + c._count._all, 0),
+    revenueTodayBrlCents: todayByCurrency.find((c) => c.currency === "BRL")?._sum.amountCents ?? 0,
+    revenueTodayUsdCents: todayByCurrency.find((c) => c.currency === "USD")?._sum.amountCents ?? 0,
     salesLast7Days: last7,
     salesLast30Days: last30,
     pendingOrders: pending,

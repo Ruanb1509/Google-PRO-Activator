@@ -11,6 +11,8 @@ interface Stats {
   revenueBrlCents: number;
   revenueUsdCents: number;
   salesToday: number;
+  revenueTodayBrlCents: number;
+  revenueTodayUsdCents: number;
   salesLast7Days: number;
   salesLast30Days: number;
   pendingOrders: number;
@@ -75,6 +77,7 @@ export default function OverviewPage() {
         <Stat label="Receita em BRL" value={fmtBRL(data.revenueBrlCents)} />
         <Stat label="Receita em USD" value={fmtUSD(data.revenueUsdCents)} />
         <Stat label="Vendas hoje" value={data.salesToday} />
+        <Stat label="Faturado hoje (BRL)" value={fmtBRL(data.revenueTodayBrlCents)} hint={data.revenueTodayUsdCents > 0 ? `+ ${fmtUSD(data.revenueTodayUsdCents)} em USD` : "Pedidos pagos desde 00:00"} tone={data.revenueTodayBrlCents > 0 ? "ok" : undefined} />
         <Stat label="Últimos 7 dias" value={data.salesLast7Days} />
         <Stat label="Últimos 30 dias" value={data.salesLast30Days} />
         <Stat label="Pedidos pendentes" value={data.pendingOrders} hint="Aguardando pagamento" />
