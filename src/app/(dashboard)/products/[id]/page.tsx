@@ -99,10 +99,73 @@ export default function ProductDetailPage() {
           <div className="space-y-4">
             <AddStockPanel productId={data.id} onAdded={reload} />
             {data.supplierSlug && <SupplierBuyPanel productId={data.id} slug={data.supplierSlug} onAdded={reload} />}
+            {isAdmin && (data.bulkDiscounts?.length ?? 0) > 0 && <PromoPanel productId={data.id} />}
           </div>
         )}
       </div>
     </>
+  );
+}
+
+interface PromoPreview {
+  recipients: number;
+  messages: { pt_BR: string; en_US: string };
+}
+
+/** Telegram HTML -> plain text, for the preview. */
+const plainText = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+
+/** Tells every customer about this product's quantity discounts (preview first, then send). */
+function PromoPanel({ productId }: { productId: string }) {
+  const [preview, setPreview] = useState<PromoPreview | null>(null);
+  const [sentTo, setSentTo] = useState<number | null>(null);
+  const action = useAction();
+
+  async function load() {
+    setSentTo(null);
+    const r = await action.run("preview", () => api<PromoPreview>(`/api/admin/products/${productId}/promo`));
+    if (r) setPreview(r);
+  }
+
+  async function send() {
+    if (!preview) return;
+    if (!confirm(`Enviar o aviso de desconto para ${preview.recipients} cliente(s)? Não dá para desfazer.`)) return;
+    const r = await action.run("send", () => api<{ recipients: number }>(`/api/admin/products/${productId}/promo`, { method: "POST" }));
+    if (r) {
+      setSentTo(r.recipients);
+      setPreview(null);
+    }
+  }
+
+  return (
+    <Card title="📣 Avisar clientes sobre o desconto">
+      <p className="mb-3 text-sm text-muted">Manda no bot, para todos os clientes, a tabela de descontos por quantidade deste produto com um botão para comprar.</p>
+      {action.error && <div className="mb-3"><ErrorBox error={action.error} /></div>}
+      {sentTo !== null && (
+        <div className="mb-3">
+          <Notice>Enviando para {sentTo} cliente(s). Você recebe um resumo no Telegram de avisos quando terminar.</Notice>
+        </div>
+      )}
+      {preview && (
+        <div className="mb-3 space-y-2">
+          <span className="label">Prévia (clientes em português)</span>
+          <pre className="whitespace-pre-wrap rounded-lg border border-line p-3 font-sans text-sm">{plainText(preview.messages.pt_BR)}</pre>
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted">Prévia em inglês</summary>
+            <pre className="mt-1 whitespace-pre-wrap rounded-lg border border-line p-3 font-sans text-sm">{plainText(preview.messages.en_US)}</pre>
+          </details>
+        </div>
+      )}
+      {preview ? (
+        <Button variant="primary" loading={action.busy === "send"} onClick={send}>
+          Enviar para {preview.recipients} cliente(s)
+        </Button>
+      ) : (
+        <Button loading={action.busy === "preview"} onClick={load}>
+          Ver prévia
+        </Button>
+      )}
+    </Card>
   );
 }
 

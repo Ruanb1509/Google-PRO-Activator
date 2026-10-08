@@ -113,6 +113,8 @@
   "custom_quantity_prompt": "✏️ Digite quantas unidades você quer (de 1 a {max}):",
   "invalid_quantity": "❌ Quantidade inválida. Digite um número de 1 a {max}.",
   "quantity_discount": "🎁 Desconto por quantidade: <b>-{percent}%</b> ({price} cada)",
+  "promo_bulk_discount": "🎁 <b>Promoção: {name}</b>\n\nAgora com <b>desconto por quantidade</b> — quanto mais você leva, menos paga por unidade:\n\n{lines}\n\nPagamento via PIX com entrega automática aqui no chat. 👇",
+  "promo_view_product": "🛒 Aproveitar agora",
   "quantity_button": "{quantity} un.",
   "not_enough_stock": "😕 Só temos <b>{stock}</b> unidade(s) disponível(is) agora. Escolha uma quantidade menor."
 }
