@@ -33,15 +33,23 @@ function mainMenu(locale: Locale) {
   const tr = (k: MessageKey) => t(locale, k);
   return new Keyboard()
     .text(tr("menu_buy")).text(tr("menu_orders")).row()
-    .text(tr("menu_prices")).text(tr("menu_balance")).row()
-    .text(tr("menu_support")).text(tr("menu_help")).row()
-    .text(tr("menu_language"))
+    .text(tr("menu_prices")).text(tr("menu_support")).row()
+    .text(tr("menu_help")).text(tr("menu_language"))
     .resized()
     .persistent()
     .placeholder(tr("menu_placeholder"));
 }
 
 const languageKeyboard = new InlineKeyboard().text("🇧🇷 Português", "lang:pt_BR").text("🇺🇸 English", "lang:en_US");
+
+/** Price in the currencies customers can actually pay with (only R$ when PIX is the only method). */
+async function priceFormatter(locale: Locale) {
+  const methods = await availablePaymentMethods(locale);
+  const currencies = [...new Set(methods.map((m) => m.currency))].sort(); // BRL before USD
+  const shown = currencies.length ? currencies : ["BRL"];
+  return (p: { priceBrlCents: number; priceUsdCents: number }) =>
+    shown.map((c) => formatMoney(c === "BRL" ? p.priceBrlCents : p.priceUsdCents, c, locale)).join(" / ");
+}
 
 function isMenu(text: string, key: MessageKey): boolean {
   return allTranslations(key).includes(text);
@@ -68,25 +76,27 @@ async function showProducts(ctx: StoreContext) {
   // Sold-out products stay listed (tagged) so customers can ask to be notified when they are back.
   const products = await listProducts();
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
-  const keyboard = (withIcons: boolean) => {
+  const price = await priceFormatter(ctx.locale);
+  // "Name [stock][price]": green button when it can be bought, red when sold out.
+  const keyboard = (styled: boolean) => {
     const kb = new InlineKeyboard();
     for (const p of products) {
-      const price = `${formatMoney(p.priceBrlCents, "BRL", ctx.locale)} / ${formatMoney(p.priceUsdCents, "USD", ctx.locale)}`;
-      const label = p.sellable > 0 ? `${localizedName(p, ctx.locale)} · ${price}` : `${localizedName(p, ctx.locale)} · ${ctx.tr("sold_out_tag")}`;
-      kb.text(label, `p:${p.id}`);
-      // Product logo on the left of the button (custom emoji, see product-emoji.service.ts).
-      if (withIcons && p.logoEmojiId) kb.icon(p.logoEmojiId);
+      kb.text(`${localizedName(p, ctx.locale)} [${p.sellable}][${price(p)}]`, `p:${p.id}`);
+      if (styled) {
+        kb.style(p.sellable > 0 ? "success" : "danger");
+        // Product logo on the left of the button (custom emoji, see product-emoji.service.ts).
+        if (p.logoEmojiId) kb.icon(p.logoEmojiId);
+      }
       kb.row();
     }
     return kb;
   };
-  const withIcons = products.some((p) => p.logoEmojiId);
   try {
-    await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(withIcons) });
+    await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(true) });
   } catch (err) {
-    // Telegram refuses button icons when the bot owner has no Premium: keep the menu working without them.
-    if (!withIcons || !(err instanceof GrammyError && err.error_code === 400)) throw err;
-    logger.warn("bot.product_icons_failed", { err });
+    // Telegram refuses button icons when the bot owner has no Premium: keep the menu working with plain buttons.
+    if (!(err instanceof GrammyError && err.error_code === 400)) throw err;
+    logger.warn("bot.product_buttons_style_failed", { err });
     await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(false) });
   }
 }
@@ -98,8 +108,7 @@ async function showProduct(ctx: StoreContext, productId: string) {
   const text = ctx.tr("product_details", {
     name: localizedName(product, ctx.locale),
     description: localizedDescription(product, ctx.locale),
-    priceBrl: formatMoney(product.priceBrlCents, "BRL", ctx.locale),
-    priceUsd: formatMoney(product.priceUsdCents, "USD", ctx.locale),
+    price: (await priceFormatter(ctx.locale))(product),
     stock: stock > 0 ? String(stock) : "0",
   });
   if (stock <= 0) {
@@ -266,13 +275,8 @@ async function checkStatus(ctx: StoreContext, orderId: string) {
 async function showPrices(ctx: StoreContext) {
   const products = await listProducts();
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
-  const lines = products.map((p) =>
-    ctx.tr("price_line", {
-      name: localizedName(p, ctx.locale),
-      priceBrl: formatMoney(p.priceBrlCents, "BRL", ctx.locale),
-      priceUsd: formatMoney(p.priceUsdCents, "USD", ctx.locale),
-    }),
-  );
+  const price = await priceFormatter(ctx.locale);
+  const lines = products.map((p) => ctx.tr("price_line", { name: localizedName(p, ctx.locale), price: price(p), stock: p.sellable }));
   await ctx.reply([ctx.tr("prices_title"), "", ...lines].join("\n"), { parse_mode: "HTML" });
 }
 
