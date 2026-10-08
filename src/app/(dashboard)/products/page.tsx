@@ -59,6 +59,7 @@ export default function ProductsPage() {
                 <span>
                   Estoque: <b className="tabular-nums">{p.stock.available}</b> disponíveis
                 </span>
+                {p.supplierSlug && <Badge tone="info">🏭 +{p.supplierStock} no fornecedor</Badge>}
                 {p.lowStock && <Badge tone="warn">⚠️ Estoque baixo</Badge>}
                 {!p.isActive && <Badge>Inativo</Badge>}
               </div>

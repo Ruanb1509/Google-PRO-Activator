@@ -48,6 +48,10 @@ const schema = z.object({
   BINANCE_PAY_ID: z.string().optional(),
   BINANCE_API_BASE_URL: z.url().default("https://api.binance.com"),
 
+  /** Partner API (supplier): bought from when a product's own stock runs out. Unset = supplier disabled. */
+  PARTNER_API_KEY: z.string().regex(/^sk_live_[A-Za-z0-9]+$/).optional(),
+  PARTNER_API_BASE_URL: z.url().default("https://ggsoma.store/api/partner/v1"),
+
   /** Enables the fake gateway for local/preview testing. Always disabled when VERCEL_ENV=production. */
   PAYMENTS_MOCK_ENABLED: bool,
   MOCK_WEBHOOK_SECRET: z.string().optional(),

@@ -9,6 +9,7 @@ import { deliverOrder } from "@/server/notifications/delivery.service";
 import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
 import { availableStock } from "@/server/products/products.service";
 import { getSettings } from "@/server/settings/settings.service";
+import { alertSupplierFailure, fulfillFromSupplier, type SupplierOutcome } from "@/server/supplier/supplier.service";
 import type { PaymentStatusResult } from "@/server/payments/payment-provider";
 
 type Outcome =
@@ -118,7 +119,14 @@ async function afterCommit(outcome: Outcome): Promise<void> {
         await deliverOrder(outcome.orderId);
         await checkLowStock(outcome.productId);
       } else {
+        // Local stock ran out: buy the missing units from the supplier (Partner API) when the product is linked.
+        const supplier = await fulfillFromSupplier(outcome.orderId).catch((err): SupplierOutcome => {
+          logger.error("supplier.fulfill_failed", { err, orderId: outcome.orderId });
+          return { kind: "failed", code: "INTERNAL_ERROR", message: err instanceof Error ? err.message : String(err) };
+        });
+        if (supplier.kind === "fulfilled") return;
         const order = await db().order.findUniqueOrThrow({ where: { id: outcome.orderId }, include: { user: true } });
+        if (supplier.kind === "failed") await alertSupplierFailure(order, supplier);
         const locale = order.user.locale ?? order.locale;
         await sendHtml(order.user.telegramId, t(locale, "paid_out_of_stock", { number: order.number })).catch(() => undefined);
         const assigned = await db().inventoryItem.count({ where: { orderId: order.id, status: "SOLD" } });

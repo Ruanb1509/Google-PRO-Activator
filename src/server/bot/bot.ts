@@ -9,7 +9,7 @@ import { formatMoney, parseMoneyToCents } from "@/server/common/money";
 import { rateLimit } from "@/server/common/rate-limit";
 import { allTranslations, detectLocale, formatItems, t, type MessageKey } from "@/i18n";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
-import { availableStock, listProducts, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
+import { listProducts, sellableStock, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
 import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, MAX_QUANTITY_PER_ORDER, syncOrderPayment } from "@/server/orders/orders.service";
 import { getSettings } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
@@ -72,7 +72,7 @@ async function showProducts(ctx: StoreContext) {
     const kb = new InlineKeyboard();
     for (const p of products) {
       const price = `${formatMoney(p.priceBrlCents, "BRL", ctx.locale)} / ${formatMoney(p.priceUsdCents, "USD", ctx.locale)}`;
-      const label = p.stock.available > 0 ? `${localizedName(p, ctx.locale)} · ${price}` : `${localizedName(p, ctx.locale)} · ${ctx.tr("sold_out_tag")}`;
+      const label = p.sellable > 0 ? `${localizedName(p, ctx.locale)} · ${price}` : `${localizedName(p, ctx.locale)} · ${ctx.tr("sold_out_tag")}`;
       kb.text(label, `p:${p.id}`);
       // Product logo on the left of the button (custom emoji, see product-emoji.service.ts).
       if (withIcons && p.logoEmojiId) kb.icon(p.logoEmojiId);
@@ -94,7 +94,7 @@ async function showProducts(ctx: StoreContext) {
 async function showProduct(ctx: StoreContext, productId: string) {
   const product = await db().product.findFirst({ where: { id: productId, isActive: true, deletedAt: null } });
   if (!product) return ctx.reply(ctx.tr("no_products"));
-  const stock = await availableStock(product.id);
+  const stock = await sellableStock(product);
   const text = ctx.tr("product_details", {
     name: localizedName(product, ctx.locale),
     description: localizedDescription(product, ctx.locale),
@@ -138,7 +138,7 @@ function quantityKeyboard(ctx: StoreContext, productId: string, stock: number) {
 async function showPaymentMethods(ctx: StoreContext, productId: string, quantity: number) {
   const product = await db().product.findFirst({ where: { id: productId, isActive: true, deletedAt: null } });
   if (!product) return ctx.reply(ctx.tr("no_products"));
-  const stock = await availableStock(product.id);
+  const stock = await sellableStock(product);
   if (stock <= 0) return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, product.id, await hasStockAlert(ctx.user.id, product.id)) });
   if (stock < quantity) return ctx.reply(ctx.tr("not_enough_stock", { stock }), { parse_mode: "HTML", reply_markup: quantityKeyboard(ctx, product.id, stock) });
 
@@ -202,7 +202,8 @@ async function startCheckout(ctx: StoreContext, productId: string, methodKey: st
     if (err instanceof AppError) {
       if (err.code === "OUT_OF_STOCK") {
         // Fewer units left than requested: offer the quantities still available.
-        const stock = await availableStock(productId);
+        const product = await db().product.findUnique({ where: { id: productId } });
+        const stock = product ? await sellableStock(product) : 0;
         if (stock > 0) return ctx.reply(ctx.tr("not_enough_stock", { stock }), { parse_mode: "HTML", reply_markup: quantityKeyboard(ctx, productId, stock) });
         return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, productId, await hasStockAlert(ctx.user.id, productId)) });
       }

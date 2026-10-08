@@ -198,10 +198,15 @@ async function lockFreeItems(tx: Tx, productId: string, limit: number): Promise<
     FOR UPDATE SKIP LOCKED`;
 }
 
-/** Temporarily reserves `quantity` items for a new order. Throws OUT_OF_STOCK (and the caller's tx rolls back) if there are not enough. */
-export async function reserveForOrder(tx: Tx, args: { productId: string; orderId: string; userId: string; quantity: number; until: Date }): Promise<string[]> {
+/**
+ * Temporarily reserves `quantity` items for a new order. Up to `supplierUnits` of them may be missing
+ * (bought from the supplier after payment). Throws OUT_OF_STOCK (and the caller's tx rolls back) if
+ * there are not enough.
+ */
+export async function reserveForOrder(tx: Tx, args: { productId: string; orderId: string; userId: string; quantity: number; until: Date; supplierUnits?: number }): Promise<string[]> {
   const items = await lockFreeItems(tx, args.productId, args.quantity);
-  if (items.length < args.quantity) throw Errors.outOfStock();
+  if (items.length + (args.supplierUnits ?? 0) < args.quantity) throw Errors.outOfStock();
+  if (!items.length) return [];
   const expired = items.filter((i) => i.order_id && i.order_id !== args.orderId);
   if (expired.length) {
     await tx.inventoryItemEvent.createMany({ data: expired.map((i) => ({ itemId: i.id, type: "RESERVATION_EXPIRED", orderId: i.order_id, actorType: "SYSTEM" as ActorType })) });

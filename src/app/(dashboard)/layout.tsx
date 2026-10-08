@@ -13,6 +13,7 @@ const NAV: { href: string; label: string; icon: string; adminOnly?: boolean }[] 
   { href: "/", label: "Visão geral", icon: "📊" },
   { href: "/products", label: "Produtos", icon: "🏷️" },
   { href: "/inventory", label: "Estoque", icon: "📦" },
+  { href: "/supplier", label: "Fornecedor", icon: "🏭" },
   { href: "/orders", label: "Pedidos", icon: "🧾" },
   { href: "/customers", label: "Clientes", icon: "👥" },
   { href: "/support", label: "Suporte", icon: "💬" },

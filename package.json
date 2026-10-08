@@ -21,6 +21,7 @@
     "bot:polling": "tsx scripts/bot-polling.ts",
     "bot:set-webhook": "tsx scripts/set-webhook.ts",
     "seed": "tsx scripts/seed.ts",
+    "supplier:buy": "tsx scripts/supplier-buy.ts",
     "test:integration": "vitest run tests/integration"
   },
   "dependencies": {

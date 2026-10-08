@@ -4,6 +4,7 @@ import { db } from "@/server/common/db";
 import { Errors } from "@/server/common/errors";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { getSettings } from "@/server/settings/settings.service";
+import { supplierUnits } from "@/server/supplier/supplier-stock";
 import { AI_LOGO_KEYS } from "@/lib/ai-logos";
 
 const MAX_LOGO_BYTES = 256 * 1024;
@@ -54,6 +55,10 @@ export const productInputSchema = z.object({
   /** Built-in logo (gallery) or uploaded image; setting one clears the other. */
   logoKey: logoKeySchema.nullish(),
   logoImage: logoImageSchema.nullish(),
+  /** Partner API product slug bought when the local stock runs out (null = no supplier). */
+  supplierSlug: z.string().trim().regex(/^[A-Za-z0-9._-]{1,120}$/, "Slug inválido").nullish(),
+  /** Most paid to the supplier per unit, in USD cents (null = the USD sale price). */
+  supplierMaxCostCents: z.number().int().min(1).max(100_000_000).nullish(),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
 export const productUpdateSchema = productInputSchema.partial();
@@ -98,26 +103,33 @@ export async function availableStock(productId: string): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
+/** Units a customer can buy now: own stock plus what the linked supplier can deliver. */
+export async function sellableStock(product: Pick<Product, "id" | "supplierSlug" | "supplierMaxCostCents" | "priceUsdCents">): Promise<number> {
+  const [own, supplier] = await Promise.all([availableStock(product.id), supplierUnits([product])]);
+  return own + (supplier.get(product.id) ?? 0);
+}
+
 export async function listProducts(opts: { includeInactive?: boolean } = {}) {
   const products = await db().product.findMany({
     where: { deletedAt: null, ...(opts.includeInactive ? {} : { isActive: true }) },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
-  const [counts, settings] = await Promise.all([stockCounts(products.map((p) => p.id)), getSettings()]);
+  const [counts, settings, supplier] = await Promise.all([stockCounts(products.map((p) => p.id)), getSettings(), supplierUnits(products)]);
   return products.map((p) => {
     const stock = counts.get(p.id) ?? emptyCounts();
     const threshold = p.lowStockThreshold ?? settings.lowStockThreshold;
-    return { ...withLogo(p), stock, lowStockThreshold: threshold, lowStock: p.isActive && stock.available < threshold };
+    const supplierStock = supplier.get(p.id) ?? 0;
+    return { ...withLogo(p), stock, supplierStock, sellable: stock.available + supplierStock, lowStockThreshold: threshold, lowStock: p.isActive && stock.available < threshold };
   });
 }
 
 export async function getProduct(id: string) {
   const product = await db().product.findFirst({ where: { id, deletedAt: null } });
   if (!product) throw Errors.notFound("Product");
-  const [counts, settings] = await Promise.all([stockCounts([id]), getSettings()]);
+  const [counts, settings, supplier] = await Promise.all([stockCounts([id]), getSettings(), supplierUnits([product])]);
   const stock = counts.get(id) ?? emptyCounts();
   const threshold = product.lowStockThreshold ?? settings.lowStockThreshold;
-  return { ...withLogo(product), stock, effectiveLowStockThreshold: threshold, lowStock: stock.available < threshold };
+  return { ...withLogo(product), stock, supplierStock: supplier.get(id) ?? 0, effectiveLowStockThreshold: threshold, lowStock: stock.available < threshold };
 }
 
 export async function createProduct(input: ProductInput, adminId: string, ip: string | null): Promise<Product> {

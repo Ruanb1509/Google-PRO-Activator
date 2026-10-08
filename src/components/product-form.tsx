@@ -20,6 +20,8 @@ export interface ProductPayload {
   logoKey?: string | null;
   /** Omitted = keep the uploaded image as is. */
   logoImage?: string | null;
+  supplierSlug: string | null;
+  supplierMaxCostCents: number | null;
 }
 
 export function ProductForm({
@@ -43,6 +45,8 @@ export function ProductForm({
   const [isActive, setIsActive] = useState(initial?.isActive ?? true);
   const [threshold, setThreshold] = useState(initial?.lowStockThreshold != null ? String(initial.lowStockThreshold) : "");
   const [sortOrder, setSortOrder] = useState(String(initial?.sortOrder ?? 0));
+  const [supplierSlug, setSupplierSlug] = useState(initial?.supplierSlug ?? "");
+  const [supplierMaxCost, setSupplierMaxCost] = useState(centsToInput(initial?.supplierMaxCostCents));
   const [logo, setLogo] = useState<LogoValue>({ logoKey: initial?.logoKey ?? null, logoImage: undefined });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -55,6 +59,8 @@ export function ProductForm({
     if (!priceBrlCents || priceBrlCents <= 0) return setError("Preço BRL inválido");
     if (!priceUsdCents || priceUsdCents <= 0) return setError("Preço USD inválido");
     if (threshold && !/^\d+$/.test(threshold)) return setError("Limite de estoque baixo inválido");
+    const supplierMaxCostCents = supplierMaxCost.trim() ? toCents(supplierMaxCost) : null;
+    if (supplierMaxCostCents !== null && (!supplierMaxCostCents || supplierMaxCostCents <= 0)) return setError("Custo máximo no fornecedor inválido");
     setSaving(true);
     try {
       await onSubmit({
@@ -68,6 +74,8 @@ export function ProductForm({
         isActive,
         lowStockThreshold: threshold ? Number(threshold) : null,
         sortOrder: Number(sortOrder) || 0,
+        supplierSlug: supplierSlug.trim() || null,
+        supplierMaxCostCents,
         logoKey: logo.logoKey,
         ...(logo.logoImage !== undefined ? { logoImage: logo.logoImage } : {}),
       });
@@ -113,6 +121,12 @@ export function ProductForm({
         </Field>
         <Field label="Alerta de estoque baixo" hint="Alerta quando estoque < N. Vazio = usar o padrão das configurações.">
           <input className="input" inputMode="numeric" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="padrão" />
+        </Field>
+        <Field label="Fornecedor (slug)" hint="Produto da Partner API comprado quando o estoque acaba. Vazio = sem fornecedor.">
+          <input className="input" maxLength={120} value={supplierSlug} onChange={(e) => setSupplierSlug(e.target.value)} placeholder="ex.: gemini-pro-monthly" />
+        </Field>
+        <Field label="Custo máximo no fornecedor (US$)" hint="Acima disso não compra. Vazio = o preço exterior.">
+          <input className="input" inputMode="decimal" value={supplierMaxCost} onChange={(e) => setSupplierMaxCost(e.target.value)} placeholder="= preço exterior" />
         </Field>
         <label className="flex items-center gap-2 self-end pb-2 text-sm">
           <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} /> Produto ativo (visível no bot)

@@ -13,6 +13,8 @@ import { getProvider } from "@/server/payments/registry";
 import { getSettings, type PaymentMethodConfig } from "@/server/settings/settings.service";
 import { localizedName } from "@/server/products/products.service";
 import { deliverOrder } from "@/server/notifications/delivery.service";
+import { supplierUnits } from "@/server/supplier/supplier-stock";
+import { fulfillFromSupplier } from "@/server/supplier/supplier.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import type { CreatePaymentResult } from "@/server/payments/payment-provider";
 
@@ -107,6 +109,8 @@ export async function createOrder(user: User, productId: string, methodKey: stri
   const expiresAt = new Date(Date.now() + settings.orderTtlMinutes * 60 * 1000);
   const providerExpiresAt = new Date(Date.now() + Math.max(settings.orderTtlMinutes, provider.minTtlMinutes ?? 0) * 60 * 1000);
   const productName = localizedName(product, locale);
+  // Units the supplier can deliver if the local stock is not enough (bought after the payment).
+  const supplier = (await supplierUnits([product])).get(product.id) ?? 0;
 
   // 1) Order + temporary stock reservation, atomically.
   const order = await db().$transaction(async (tx) => {
@@ -116,7 +120,7 @@ export async function createOrder(user: User, productId: string, methodKey: stri
     const o = await tx.order.create({
       data: { userId: user.id, productId, productName, quantity, status: "PENDING", currency, amountCents, paymentMethod: method.key, locale, expiresAt },
     });
-    await reserveForOrder(tx, { productId, orderId: o.id, userId: user.id, quantity, until: expiresAt });
+    await reserveForOrder(tx, { productId, orderId: o.id, userId: user.id, quantity, until: expiresAt, supplierUnits: supplier });
     await tx.payment.create({ data: { orderId: o.id, provider: provider.name, idempotencyKey: o.id, currency, amountCents } });
     await orderEvent({ orderId: o.id, type: "CREATED", actorType: "BOT", details: { method: method.key, provider: provider.name, quantity, amountCents, currency } }, tx);
     return o;
@@ -339,9 +343,30 @@ export async function resendDelivery(orderId: string, adminId: string) {
   return outcome;
 }
 
-/** Assigns the missing stock to a paid order (e.g. after restocking) and delivers it. All-or-nothing. */
+/**
+ * Assigns the missing stock to a paid order (e.g. after restocking) and delivers it. All-or-nothing.
+ * Without enough local stock, the missing units are bought from the supplier when the product is linked.
+ */
 export async function fulfillOutOfStockOrder(orderId: string, adminId: string, ip: string | null) {
-  const sold = await db().$transaction(async (tx) => {
+  let source: "stock" | "supplier" = "stock";
+  let items: number;
+  try {
+    items = await assignLocalStock(orderId, adminId);
+  } catch (err) {
+    if (!(err instanceof AppError && err.code === "OUT_OF_STOCK")) throw err;
+    const supplier = await fulfillFromSupplier(orderId);
+    if (supplier.kind === "not_applicable") throw err;
+    if (supplier.kind === "failed") throw Errors.conflict(`Sem estoque local e a compra no fornecedor falhou: ${supplier.code} — ${supplier.message}`, "OUT_OF_STOCK");
+    source = "supplier";
+    items = supplier.units;
+  }
+  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.ORDER_UPDATED, resourceType: "order", resourceId: orderId, details: { action: "fulfill", items, source } });
+  // The supplier path already delivered the order.
+  return source === "supplier" ? "delivered" : deliverOrder(orderId);
+}
+
+async function assignLocalStock(orderId: string, adminId: string): Promise<number> {
+  return db().$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
     if (order.status !== "PAID") throw Errors.conflict("Pedido não está pago aguardando entrega");
@@ -350,6 +375,4 @@ export async function fulfillOutOfStockOrder(orderId: string, adminId: string, i
     await orderEvent({ orderId, type: "ITEM_ASSIGNED", actorType: "ADMIN", adminId, details: { quantity: order.quantity } }, tx);
     return n;
   });
-  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.ORDER_UPDATED, resourceType: "order", resourceId: orderId, details: { action: "fulfill", items: sold } });
-  return deliverOrder(orderId);
 }

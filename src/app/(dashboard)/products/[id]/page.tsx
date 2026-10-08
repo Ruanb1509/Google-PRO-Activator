@@ -47,6 +47,7 @@ export default function ProductDetailPage() {
           <span className="flex flex-wrap items-center gap-2">
             🇧🇷 {fmtBRL(data.priceBrlCents)} · 🌎 {fmtUSD(data.priceUsdCents)}
             {data.isActive ? <Badge tone="ok">Ativo</Badge> : <Badge>Inativo</Badge>}
+            {data.supplierSlug && <Badge tone="info">🏭 +{data.supplierStock} no fornecedor</Badge>}
             {data.lowStock && <Badge tone="warn">⚠️ Estoque baixo</Badge>}
           </span>
         }
@@ -94,9 +95,67 @@ export default function ProductDetailPage() {
             }}
           />
         </Card>
-        {canEdit && <AddStockPanel productId={data.id} onAdded={reload} />}
+        {canEdit && (
+          <div className="space-y-4">
+            <AddStockPanel productId={data.id} onAdded={reload} />
+            {data.supplierSlug && <SupplierBuyPanel productId={data.id} slug={data.supplierSlug} onAdded={reload} />}
+          </div>
+        )}
       </div>
     </>
+  );
+}
+
+interface SupplierBuyResult {
+  supplierOrderCode: string;
+  added: number;
+  duplicates: number;
+  totalCostCents: number;
+  balanceAfterCents: number | null;
+}
+
+/** Buys units from the linked supplier into this product's own stock. */
+function SupplierBuyPanel({ productId, slug, onAdded }: { productId: string; slug: string; onAdded: () => void }) {
+  const [quantity, setQuantity] = useState("1");
+  const [result, setResult] = useState<SupplierBuyResult | null>(null);
+  const action = useAction();
+
+  async function buy() {
+    const q = Number(quantity);
+    if (!Number.isInteger(q) || q < 1 || q > 50) return action.setError("Quantidade inválida (1 a 50)");
+    if (!confirm(`Comprar ${q} unidade(s) de "${slug}" no fornecedor? O valor é descontado do saldo da carteira do fornecedor.`)) return;
+    const r = await action.run("buy", () => api<SupplierBuyResult>(`/api/admin/products/${productId}/supplier-buy`, { method: "POST", body: { quantity: q } }));
+    if (r) {
+      setResult(r);
+      onAdded();
+    }
+  }
+
+  return (
+    <Card title="Comprar do fornecedor para o estoque">
+      <p className="mb-3 text-sm text-muted">
+        Compra unidades de <code>{slug}</code> e coloca no seu estoque. Quando o estoque acaba, o bot já compra sozinho para cada venda.
+      </p>
+      {action.error && <div className="mb-3"><ErrorBox error={action.error} /></div>}
+      {result && (
+        <div className="mb-3">
+          <Notice>
+            Pedido {result.supplierOrderCode}: {result.added} item(ns) adicionados ao estoque por {fmtUSD(result.totalCostCents)}
+            {result.duplicates ? ` (${result.duplicates} duplicado(s) ignorado(s))` : ""}
+            {result.balanceAfterCents !== null ? ` · saldo restante ${fmtUSD(result.balanceAfterCents)}` : ""}.
+          </Notice>
+        </div>
+      )}
+      <div className="flex items-end gap-2">
+        <label className="block w-28">
+          <span className="label">Quantidade</span>
+          <input className="input" inputMode="numeric" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+        </label>
+        <Button variant="primary" loading={action.busy === "buy"} onClick={buy}>
+          Comprar
+        </Button>
+      </div>
+    </Card>
   );
 }
 

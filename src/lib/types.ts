@@ -24,12 +24,18 @@ export interface Product {
   hasCustomLogo: boolean;
   /** Public URL of the logo (gallery or uploaded), or null. */
   logoUrl: string | null;
+  /** Partner API product slug bought when the own stock runs out. */
+  supplierSlug: string | null;
+  /** Most paid to the supplier per unit (USD cents); null = the USD sale price. */
+  supplierMaxCostCents: number | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface ProductWithStock extends Product {
   stock: StockCounts;
+  /** Units the linked supplier can deliver right now. */
+  supplierStock: number;
   lowStock: boolean;
 }
 

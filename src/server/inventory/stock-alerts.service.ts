@@ -4,7 +4,7 @@ import { db } from "@/server/common/db";
 import { logger } from "@/server/common/logger";
 import { DEFAULT_LOCALE, t } from "@/i18n";
 import { sendHtml } from "@/server/notifications/telegram";
-import { availableStock, localizedName } from "@/server/products/products.service";
+import { localizedName, sellableStock } from "@/server/products/products.service";
 
 /** Telegram allows ~30 messages/second per bot; stay well below it. */
 const SEND_GAP_MS = 50;
@@ -38,7 +38,7 @@ export async function notifyRestocks(opts: { productId?: string; limit?: number 
   for (const productId of productIds) {
     if (budget <= 0) break;
     const product = await db().product.findFirst({ where: { id: productId, isActive: true, deletedAt: null } });
-    if (!product || (await availableStock(productId)) <= 0) continue;
+    if (!product || (await sellableStock(product)) <= 0) continue;
 
     const alerts = await db().stockAlert.findMany({
       where: { productId },
