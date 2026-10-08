@@ -4,6 +4,7 @@ import { env } from "@/server/config/env";
 import { logger } from "@/server/common/logger";
 
 let api: Api | undefined;
+let alertsApi: Api | undefined;
 
 /** Telegram Bot API client for outbound messages (the token never leaves the server). */
 export function telegramApi(): Api {
@@ -11,8 +12,16 @@ export function telegramApi(): Api {
   return api;
 }
 
-export async function sendHtml(chatId: bigint | number | string, html: string, replyMarkup?: InlineKeyboardMarkup): Promise<void> {
-  await telegramApi().sendMessage(String(chatId), html, {
+/** Bot that sends the admin alerts: the dedicated alerts bot when configured, else the store bot. */
+function adminAlertsApi(): Api {
+  const token = env().ADMIN_ALERT_BOT_TOKEN;
+  if (!token) return telegramApi();
+  if (!alertsApi) alertsApi = new Api(token);
+  return alertsApi;
+}
+
+export async function sendHtml(chatId: bigint | number | string, html: string, replyMarkup?: InlineKeyboardMarkup, via: Api = telegramApi()): Promise<void> {
+  await via.sendMessage(String(chatId), html, {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
     ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
@@ -32,7 +41,7 @@ export async function alertAdmins(html: string): Promise<void> {
   const ids = env().ADMIN_ALERT_CHAT_IDS.split(",").map((s) => s.trim()).filter(Boolean);
   await Promise.all(
     ids.map((id) =>
-      sendHtml(id, html).catch((err) => logger.warn("telegram.admin_alert_failed", { err, chatId: id })),
+      sendHtml(id, html, undefined, adminAlertsApi()).catch((err) => logger.warn("telegram.admin_alert_failed", { err, chatId: id })),
     ),
   );
 }

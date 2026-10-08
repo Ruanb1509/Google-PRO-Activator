@@ -26,6 +26,8 @@ const schema = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().regex(/^[A-Za-z0-9_-]{16,256}$/),
   /** Comma separated chat ids that receive operational alerts (low stock, delivery failures). */
   ADMIN_ALERT_CHAT_IDS: z.string().optional().default(""),
+  /** Optional separate bot (from @BotFather) that sends the admin alerts. Unset = the store bot sends them. */
+  ADMIN_ALERT_BOT_TOKEN: z.string().min(20).optional(),
   /**
    * Telegram user id of the bot owner (must have Telegram Premium). Owns the custom emoji set that
    * shows product logos on the bot buttons. Unset = buttons without logo icons.

@@ -126,9 +126,10 @@ async function afterCommit(outcome: Outcome): Promise<void> {
         });
         if (supplier.kind === "fulfilled") return;
         const order = await db().order.findUniqueOrThrow({ where: { id: outcome.orderId }, include: { user: true } });
-        if (supplier.kind === "failed") await alertSupplierFailure(order, supplier);
         const locale = order.user.locale ?? order.locale;
         await sendHtml(order.user.telegramId, t(locale, "paid_out_of_stock", { number: order.number })).catch(() => undefined);
+        // Linked to the supplier: one alert with the customer, product and reason. Otherwise the generic one.
+        if (supplier.kind === "failed") return void (await alertSupplierFailure(order, supplier));
         const assigned = await db().inventoryItem.count({ where: { orderId: order.id, status: "SOLD" } });
         await alertAdmins(`🚨 Pedido <b>#${order.number}</b> foi PAGO mas o produto <b>${escapeHtml(order.productName)}</b> está sem estoque (${assigned}/${order.quantity} unidades atribuídas). Reponha o estoque e use “Atribuir estoque e entregar”, ou reembolse.`);
       }

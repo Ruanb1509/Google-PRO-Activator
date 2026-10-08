@@ -7,6 +7,7 @@ import { encrypt, keyedHash } from "@/server/common/crypto";
 import { logger } from "@/server/common/logger";
 import { rateLimit } from "@/server/common/rate-limit";
 import { escapeHtml } from "@/i18n";
+import { formatMoney } from "@/server/common/money";
 import { maskValue } from "@/server/inventory/inventory.parser";
 import { orderEvent } from "@/server/orders/order-events";
 import { deliverOrder } from "@/server/notifications/delivery.service";
@@ -163,10 +164,38 @@ export async function purchaseToStock(productId: string, quantity: number, actor
   return result;
 }
 
-/** Admin alert for a failed supplier purchase, with the reason in plain words. */
-export async function alertSupplierFailure(order: { number: number; productName: string }, outcome: Extract<SupplierOutcome, { kind: "failed" }>): Promise<void> {
+type AlertOrder = {
+  number: number;
+  productName: string;
+  quantity: number;
+  amountCents: number;
+  currency: string;
+  user: { telegramId: bigint; username: string | null; firstName: string | null };
+};
+
+/** "Name (@user) · ID 123", linking to the customer's Telegram profile. */
+function customerLabel(user: AlertOrder["user"]): string {
+  const name = escapeHtml(user.firstName || "Cliente");
+  const handle = user.username ? ` (@${escapeHtml(user.username)})` : "";
+  return `<a href="tg://user?id=${user.telegramId}">${name}</a>${handle} · ID <code>${user.telegramId}</code>`;
+}
+
+/** Admin alert for a paid order the supplier could not fill: who bought what, and why it wasn't delivered. */
+export async function alertSupplierFailure(order: AlertOrder, outcome: Extract<SupplierOutcome, { kind: "failed" }>): Promise<void> {
+  const title = outcome.code === "INSUFFICIENT_BALANCE" ? "💸 <b>Venda sem entrega: falta de saldo no fornecedor</b>" : "🏭 <b>Venda sem entrega: a compra no fornecedor falhou</b>";
   const reason = ALERTS[outcome.code] ?? `${outcome.code}: ${outcome.message}`;
-  await alertAdmins(`🏭 Pedido <b>#${order.number}</b> (${escapeHtml(order.productName)}): a compra no fornecedor falhou — ${escapeHtml(reason)}. Nova tentativa automática nas próximas horas.`);
+  await alertAdmins(
+    [
+      title,
+      "",
+      `👤 Cliente: ${customerLabel(order.user)}`,
+      `📦 Produto: <b>${escapeHtml(order.productName)}</b> × ${order.quantity}`,
+      `🧾 Pedido <b>#${order.number}</b> · pago ${formatMoney(order.amountCents, order.currency)}`,
+      "",
+      `O cliente pagou mas <b>não recebeu</b> o produto — ${escapeHtml(reason)}.`,
+      "Assim que resolver, a entrega é automática (nova tentativa a cada 10 min por 24 h). Ou reembolse pelo painel.",
+    ].join("\n"),
+  );
 }
 
 /**
@@ -179,7 +208,7 @@ export async function retrySupplierOrders(limit = 10): Promise<number> {
     where: { status: "PAID", paidAt: { gt: new Date(Date.now() - 24 * 3600 * 1000) }, product: { supplierSlug: { not: null } } },
     orderBy: { paidAt: "asc" },
     take: 50,
-    select: { id: true, quantity: true, _count: { select: { inventoryItems: { where: { status: "SOLD" } } } } },
+    select: { id: true, number: true, productName: true, quantity: true, _count: { select: { inventoryItems: { where: { status: "SOLD" } } } } },
   });
   let fulfilled = 0;
   for (const o of orders) {
@@ -187,7 +216,10 @@ export async function retrySupplierOrders(limit = 10): Promise<number> {
     if (o._count.inventoryItems >= o.quantity) continue;
     if (!(await rateLimit(`supplier:retry:${o.id}`, 1, 600))) continue;
     try {
-      if ((await fulfillFromSupplier(o.id)).kind === "fulfilled") fulfilled++;
+      if ((await fulfillFromSupplier(o.id)).kind === "fulfilled") {
+        fulfilled++;
+        await alertAdmins(`✅ Pedido <b>#${o.number}</b> (${escapeHtml(o.productName)}) comprado no fornecedor e entregue ao cliente.`);
+      }
     } catch (err) {
       logger.error("supplier.retry_failed", { err, orderId: o.id });
     }
