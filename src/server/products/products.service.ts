@@ -4,7 +4,7 @@ import { db } from "@/server/common/db";
 import { Errors } from "@/server/common/errors";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { getSettings } from "@/server/settings/settings.service";
-import { supplierUnits } from "@/server/supplier/supplier-stock";
+import { supplierIcons, supplierUnits } from "@/server/supplier/supplier-stock";
 import { AI_LOGO_KEYS } from "@/lib/ai-logos";
 
 const MAX_LOGO_BYTES = 256 * 1024;
@@ -114,12 +114,14 @@ export async function listProducts(opts: { includeInactive?: boolean } = {}) {
     where: { deletedAt: null, ...(opts.includeInactive ? {} : { isActive: true }) },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
-  const [counts, settings, supplier] = await Promise.all([stockCounts(products.map((p) => p.id)), getSettings(), supplierUnits(products)]);
+  const [counts, settings, supplier, icons] = await Promise.all([stockCounts(products.map((p) => p.id)), getSettings(), supplierUnits(products), supplierIcons(products)]);
   return products.map((p) => {
     const stock = counts.get(p.id) ?? emptyCounts();
     const threshold = p.lowStockThreshold ?? settings.lowStockThreshold;
     const supplierStock = supplier.get(p.id) ?? 0;
-    return { ...withLogo(p), stock, supplierStock, sellable: stock.available + supplierStock, lowStockThreshold: threshold, lowStock: p.isActive && stock.available < threshold };
+    // Bot button icon: the product's own logo emoji, else the service logo from the supplier.
+    const buttonEmojiId = p.logoEmojiId ?? icons.get(p.id) ?? null;
+    return { ...withLogo(p), stock, supplierStock, sellable: stock.available + supplierStock, buttonEmojiId, lowStockThreshold: threshold, lowStock: p.isActive && stock.available < threshold };
   });
 }
 

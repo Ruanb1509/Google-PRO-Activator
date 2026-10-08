@@ -12,7 +12,7 @@
   "menu_placeholder": "Choose an option",
   "back": "⬅️ Back",
   "buy": "Buy",
-  "choose_product": "🛒 <b>Choose a product:</b>",
+  "choose_product": "🛒 <b>Choose a product</b>\n\n🟢 available   🔴 sold out\n<i>Name [stock][price]</i>",
   "no_products": "There are no products available right now. Please come back later!",
   "product_details": "<b>{name}</b>\n\n{description}\n\n💰 {price}\n📦 Available: {stock}",
   "out_of_stock": "😕 Product out of stock. Tap <b>🔔 Notify me</b> and we'll message you as soon as it's back.",

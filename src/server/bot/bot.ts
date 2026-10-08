@@ -72,32 +72,37 @@ async function showMenu(ctx: StoreContext, opts: { banner?: boolean } = {}) {
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenu(ctx.locale) });
 }
 
+/** Richest product-button look Telegram accepted so far (icons need a Premium bot owner). Per instance. */
+type ButtonLook = "icons" | "colors" | "plain";
+const BUTTON_LOOKS: ButtonLook[] = ["icons", "colors", "plain"];
+let buttonLook: ButtonLook = "icons";
+
 async function showProducts(ctx: StoreContext) {
-  // Sold-out products stay listed (tagged) so customers can ask to be notified when they are back.
-  const products = await listProducts();
+  // Sold-out products stay listed (at the end, in red) so customers can ask to be notified when they are back.
+  const products = (await listProducts()).sort((a, b) => Number(b.sellable > 0) - Number(a.sellable > 0));
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
   const price = await priceFormatter(ctx.locale);
-  // "Name [stock][price]": green button when it can be bought, red when sold out.
-  const keyboard = (styled: boolean) => {
+  // "Name [stock][price]" with the service logo on the left; green when it can be bought, red when sold out.
+  const keyboard = (look: ButtonLook) => {
     const kb = new InlineKeyboard();
     for (const p of products) {
       kb.text(`${localizedName(p, ctx.locale)} [${p.sellable}][${price(p)}]`, `p:${p.id}`);
-      if (styled) {
-        kb.style(p.sellable > 0 ? "success" : "danger");
-        // Product logo on the left of the button (custom emoji, see product-emoji.service.ts).
-        if (p.logoEmojiId) kb.icon(p.logoEmojiId);
-      }
+      if (look !== "plain") kb.style(p.sellable > 0 ? "success" : "danger");
+      if (look === "icons" && p.buttonEmojiId) kb.icon(p.buttonEmojiId);
       kb.row();
     }
     return kb;
   };
-  try {
-    await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(true) });
-  } catch (err) {
-    // Telegram refuses button icons when the bot owner has no Premium: keep the menu working with plain buttons.
-    if (!(err instanceof GrammyError && err.error_code === 400)) throw err;
-    logger.warn("bot.product_buttons_style_failed", { err });
-    await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(false) });
+  for (const look of BUTTON_LOOKS.slice(BUTTON_LOOKS.indexOf(buttonLook))) {
+    try {
+      await ctx.reply(ctx.tr("choose_product"), { parse_mode: "HTML", reply_markup: keyboard(look) });
+      buttonLook = look;
+      return;
+    } catch (err) {
+      // Telegram refuses icons (bot owner without Premium) or styles: fall back to a simpler look.
+      if (look === "plain" || !(err instanceof GrammyError && err.error_code === 400)) throw err;
+      logger.warn("bot.product_buttons_look_failed", { err, look });
+    }
   }
 }
 

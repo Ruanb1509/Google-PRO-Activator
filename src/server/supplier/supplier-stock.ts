@@ -39,6 +39,27 @@ export function supplierUnitsFrom(catalog: Map<string, PartnerProduct>, product:
   return Math.max(0, item.stock.count);
 }
 
+/**
+ * Service logo (Telegram custom emoji) of each linked product, taken from the supplier catalog: the
+ * provider's icon (e.g. the CapCut logo), else the product's own. Empty when the supplier is unreachable.
+ */
+export async function supplierIcons(products: Pick<Product, "id" | "supplierSlug">[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const linked = products.filter((p) => p.supplierSlug);
+  if (!linked.length || !partnerConfigured()) return out;
+  try {
+    const catalog = await supplierCatalog();
+    for (const p of linked) {
+      const item = catalog.get(p.supplierSlug!);
+      const icon = item?.provider.emoji?.customTelegramId ?? item?.emoji?.customTelegramId;
+      if (icon && /^\d{1,32}$/.test(icon)) out.set(p.id, icon);
+    }
+  } catch (err) {
+    logger.warn("supplier.catalog_failed", { err });
+  }
+  return out;
+}
+
 /** Supplier units per product id. Fails closed: if the supplier cannot be reached, it adds no stock. */
 export async function supplierUnits(products: (SupplierFields & { id: string })[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();

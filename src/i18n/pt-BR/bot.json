@@ -12,7 +12,7 @@
   "menu_placeholder": "Escolha uma opção",
   "back": "⬅️ Voltar",
   "buy": "Comprar",
-  "choose_product": "🛒 <b>Escolha um produto:</b>",
+  "choose_product": "🛒 <b>Escolha um produto</b>\n\n🟢 disponível   🔴 esgotado\n<i>Nome [estoque][preço]</i>",
   "no_products": "No momento não há produtos disponíveis. Volte mais tarde!",
   "product_details": "<b>{name}</b>\n\n{description}\n\n💰 {price}\n📦 Disponível: {stock}",
   "out_of_stock": "😕 Produto sem estoque no momento. Toque em <b>🔔 Avise-me</b> e você recebe uma mensagem assim que ele voltar.",

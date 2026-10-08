@@ -10,12 +10,19 @@ const TIMEOUT_MS = 20_000;
 
 export type PartnerDeliveryType = "LINK" | "COUPON" | "READY_ACCOUNT";
 
+/** `customTelegramId` is a Telegram custom emoji (the service logo in the supplier's bot). */
+export interface PartnerEmoji {
+  normal: string | null;
+  customTelegramId: string | null;
+}
+
 export interface PartnerProduct {
   id: number;
   slug: string;
   productCode?: string | null;
   name: string;
-  provider: { key: string; name: string };
+  provider: { key: string; name: string; emoji?: PartnerEmoji | null };
+  emoji?: PartnerEmoji | null;
   deliveryType: PartnerDeliveryType;
   yourPrice: string;
   currency: string;
