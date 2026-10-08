@@ -19,7 +19,8 @@
   "choose_payment": "💳 <b>Escolha a forma de pagamento:</b>",
   "no_payment_methods": "Nenhuma forma de pagamento está disponível agora. Tente novamente mais tarde.",
   "order_created": "🧾 <b>Pedido #{number}</b>\nProduto: {product}\nQuantidade: {quantity}\nValor: <b>{amount}</b>\n\n⏳ Pague em até {minutes} minutos — depois disso a reserva é liberada.",
-  "pix_instructions": "📲 <b>Pague com PIX</b>\n\nEscaneie o QR Code ou use o código <i>copia e cola</i> abaixo:\n\n<code>{code}</code>\n\nA confirmação é automática — assim que o banco confirmar, você recebe seu produto aqui.",
+  "copy_pix_button": "📋 Copiar código PIX",
+  "pix_instructions": "📲 <b>Pague com PIX</b>\n\nEscaneie o QR Code ou use o código <i>copia e cola</i> abaixo:\n\n<pre>{code}</pre>\n\nA confirmação é automática — assim que o banco confirmar, você recebe seu produto aqui.",
   "checkout_instructions": "🔐 Toque no botão abaixo para pagar com segurança. A confirmação é automática — você receberá seu produto aqui.",
   "balance_paid": "✅ Pagamento com saldo aprovado. Seu produto será enviado em instantes.",
   "pay_button": "💳 Pagar agora",
@@ -106,6 +107,12 @@
   "restock_view_product": "🛒 Ver produto",
   "choose_quantity": "🔢 <b>Quantas unidades você quer?</b>",
   "quantity_summary": "🛒 <b>{product}</b>\nQuantidade: <b>{quantity}</b>",
+  "bulk_discounts_title": "🎁 <b>Descontos por quantidade:</b>",
+  "bulk_discount_line": "{range} un. → {price} cada",
+  "custom_quantity_button": "✏️ Quantidade personalizada",
+  "custom_quantity_prompt": "✏️ Digite quantas unidades você quer (de 1 a {max}):",
+  "invalid_quantity": "❌ Quantidade inválida. Digite um número de 1 a {max}.",
+  "quantity_discount": "🎁 Desconto por quantidade: <b>-{percent}%</b> ({price} cada)",
   "quantity_button": "{quantity} un.",
   "not_enough_stock": "😕 Só temos <b>{stock}</b> unidade(s) disponível(is) agora. Escolha uma quantidade menor."
 }

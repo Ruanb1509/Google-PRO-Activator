@@ -6,6 +6,7 @@ import { audit, AuditActions } from "@/server/audit/audit.service";
 import { getSettings } from "@/server/settings/settings.service";
 import { supplierIcons, supplierUnits } from "@/server/supplier/supplier-stock";
 import { AI_LOGO_KEYS } from "@/lib/ai-logos";
+import { MAX_BULK_PERCENT_OFF } from "@/lib/bulk-discounts";
 
 const MAX_LOGO_BYTES = 256 * 1024;
 
@@ -59,6 +60,13 @@ export const productInputSchema = z.object({
   supplierSlug: z.string().trim().regex(/^[A-Za-z0-9._-]{1,120}$/, "Slug inválido").nullish(),
   /** Most paid to the supplier per unit, in USD cents (null = the USD sale price). */
   supplierMaxCostCents: z.number().int().min(1).max(100_000_000).nullish(),
+  /** Quantity discounts (empty = none). Capped at 50%: products are sold at 2x the supplier cost. */
+  bulkDiscounts: z
+    .array(z.object({ minQty: z.number().int().min(2).max(1000), percentOff: z.number().gt(0).max(MAX_BULK_PERCENT_OFF) }))
+    .max(10)
+    .refine((tiers) => new Set(tiers.map((t) => t.minQty)).size === tiers.length, "Quantidade repetida nos descontos")
+    .transform((tiers) => [...tiers].sort((a, b) => a.minQty - b.minQty))
+    .optional(),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
 export const productUpdateSchema = productInputSchema.partial();

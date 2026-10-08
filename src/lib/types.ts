@@ -28,6 +28,8 @@ export interface Product {
   supplierSlug: string | null;
   /** Most paid to the supplier per unit (USD cents); null = the USD sale price. */
   supplierMaxCostCents: number | null;
+  /** Quantity discounts [{ minQty, percentOff }] (null/empty = none). */
+  bulkDiscounts: { minQty: number; percentOff: number }[] | null;
   createdAt: string;
   updatedAt: string;
 }

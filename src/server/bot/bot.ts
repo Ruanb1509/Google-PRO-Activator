@@ -8,6 +8,7 @@ import { logger } from "@/server/common/logger";
 import { formatMoney, parseMoneyToCents } from "@/server/common/money";
 import { rateLimit } from "@/server/common/rate-limit";
 import { allTranslations, detectLocale, formatItems, t, type MessageKey } from "@/i18n";
+import { bulkDiscountTiers, bulkPercentOff, discountedUnitCents, productUnitCents } from "@/lib/bulk-discounts";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
 import { listProducts, sellableStock, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
 import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, MAX_QUANTITY_PER_ORDER, syncOrderPayment } from "@/server/orders/orders.service";
@@ -25,7 +26,7 @@ export interface StoreContext extends Context {
   tr: (key: MessageKey, vars?: Record<string, string | number>) => string;
 }
 
-type BotState = { await: "deposit_amount" } | { await: "deposit_tx"; depositId?: string } | SupportState | null;
+type BotState = { await: "quantity"; productId: string } | { await: "deposit_amount" } | { await: "deposit_tx"; depositId?: string } | SupportState | null;
 
 // ───────────────────────── Keyboards ─────────────────────────
 
@@ -149,7 +150,8 @@ async function showProduct(ctx: StoreContext, productId: string) {
 
   if (!(await availablePaymentMethods(ctx.locale)).length) return ctx.reply(`${text}\n\n${ctx.tr("no_payment_methods")}`, { parse_mode: "HTML" });
   const kb = quantityKeyboard(ctx, product.id, stock);
-  const body = `${text}\n\n${ctx.tr("choose_quantity")}`;
+  const discounts = await bulkDiscountsText(ctx, product);
+  const body = `${text}${discounts ? `\n\n${discounts}` : ""}\n\n${ctx.tr("choose_quantity")}`;
   const logo = productLogoUrl(product, true);
   if (logo) {
     try {
@@ -163,15 +165,49 @@ async function showProduct(ctx: StoreContext, productId: string) {
   await ctx.reply(body, { parse_mode: "HTML", reply_markup: kb });
 }
 
-/** 1..N units (capped by stock and by the per-order limit), five per row. */
+/** "5-10 un. → R$ 8,00 each" per discount tier (empty when the product has no quantity discounts). */
+async function bulkDiscountsText(ctx: StoreContext, product: { priceBrlCents: number; priceUsdCents: number; bulkDiscounts: unknown }): Promise<string> {
+  const tiers = bulkDiscountTiers(product.bulkDiscounts);
+  if (!tiers.length) return "";
+  const price = await priceFormatter(ctx.locale);
+  const lines = tiers.map((tier, i) => {
+    const next = tiers[i + 1];
+    const range = !next ? `${tier.minQty}+` : next.minQty - 1 > tier.minQty ? `${tier.minQty}-${next.minQty - 1}` : String(tier.minQty);
+    const each = price({
+      priceBrlCents: discountedUnitCents(product.priceBrlCents, [tier], tier.minQty),
+      priceUsdCents: discountedUnitCents(product.priceUsdCents, [tier], tier.minQty),
+    });
+    return ctx.tr("bulk_discount_line", { range, price: each });
+  });
+  return [ctx.tr("bulk_discounts_title"), ...lines].join("\n");
+}
+
+const QUANTITY_PRESETS = [1, 2, 3, 5, 10, 15, 20, 25];
+
+/** Preset quantities (capped by stock and by the per-order limit), four per row, plus a custom amount. */
 function quantityKeyboard(ctx: StoreContext, productId: string, stock: number) {
   const kb = new InlineKeyboard();
   const max = Math.min(stock, MAX_QUANTITY_PER_ORDER);
-  for (let q = 1; q <= max; q++) {
+  QUANTITY_PRESETS.filter((q) => q <= max).forEach((q, i) => {
+    if (i > 0 && i % 4 === 0) kb.row();
     kb.text(ctx.tr("quantity_button", { quantity: q }), `qty:${productId}:${q}`);
-    if (q % 5 === 0 && q < max) kb.row();
-  }
+  });
+  if (max > 1) kb.row().text(ctx.tr("custom_quantity_button"), `qc:${productId}`);
   return kb.row().text(ctx.tr("back"), "menu:buy");
+}
+
+/** Customer typed a quantity after tapping "Custom quantity". */
+async function handleCustomQuantity(ctx: StoreContext, productId: string, text: string) {
+  const product = await db().product.findFirst({ where: { id: productId, isActive: true, deletedAt: null } });
+  if (!product) {
+    await setBotState(ctx.user.id, null);
+    return ctx.reply(ctx.tr("no_products"));
+  }
+  const max = Math.min(await sellableStock(product), MAX_QUANTITY_PER_ORDER);
+  const quantity = /^\d{1,4}$/.test(text) ? Number(text) : NaN;
+  if (!(quantity >= 1 && quantity <= max)) return ctx.reply(ctx.tr("invalid_quantity", { max: Math.max(max, 1) }));
+  await setBotState(ctx.user.id, null);
+  await showPaymentMethods(ctx, productId, quantity);
 }
 
 /** After the quantity is chosen: payment methods with the total for that quantity. */
@@ -186,17 +222,32 @@ async function showPaymentMethods(ctx: StoreContext, productId: string, quantity
   if (!methods.length) return ctx.reply(ctx.tr("no_payment_methods"));
   const kb = new InlineKeyboard();
   for (const m of methods) {
-    const total = (m.currency === "BRL" ? product.priceBrlCents : product.priceUsdCents) * quantity;
+    const total = productUnitCents(product, m.currency, quantity) * quantity;
     const label = ctx.locale === "pt_BR" ? m.labelPt : m.labelEn;
     kb.text(`${label} — ${formatMoney(total, m.currency, ctx.locale)}`, `pay:${product.id}:${quantity}:${m.key}`).row();
   }
   kb.text(ctx.tr("back"), `p:${product.id}`);
-  const summary = ctx.tr("quantity_summary", { product: localizedName(product, ctx.locale), quantity });
+  let summary = ctx.tr("quantity_summary", { product: localizedName(product, ctx.locale), quantity });
+  const tiers = bulkDiscountTiers(product.bulkDiscounts);
+  const percent = bulkPercentOff(tiers, quantity);
+  if (percent > 0) {
+    const each = (await priceFormatter(ctx.locale))({
+      priceBrlCents: discountedUnitCents(product.priceBrlCents, tiers, quantity),
+      priceUsdCents: discountedUnitCents(product.priceUsdCents, tiers, quantity),
+    });
+    summary += `\n${ctx.tr("quantity_discount", { percent: ctx.locale === "pt_BR" ? String(percent).replace(".", ",") : percent, price: each })}`;
+  }
   await ctx.reply(`${summary}\n\n${ctx.tr("choose_payment")}`, { parse_mode: "HTML", reply_markup: kb });
 }
 
 function stockAlertKeyboard(ctx: StoreContext, productId: string, subscribed: boolean) {
   return new InlineKeyboard().text(ctx.tr(subscribed ? "notify_me_on" : "notify_me"), `ntf:${productId}`).row().text(ctx.tr("back"), "menu:buy");
+}
+
+/** Blue button that copies the PIX "copia e cola" code with one tap (Telegram limits it to 256 chars). */
+function addCopyPixButton(ctx: StoreContext, kb: InlineKeyboard, code: string) {
+  if (code.length > 256) return;
+  kb.copyText(ctx.tr("copy_pix_button"), code).style("primary").row();
 }
 
 async function startCheckout(ctx: StoreContext, productId: string, methodKey: string, quantity: number) {
@@ -215,6 +266,7 @@ async function startCheckout(ctx: StoreContext, productId: string, methodKey: st
       return ctx.reply(`${header}\n\n${ctx.tr("balance_paid")}`, { parse_mode: "HTML" });
     }
     if (order.payment.checkoutUrl && !order.payment.pixCopyPaste) kb.url(ctx.tr("pay_button"), order.payment.checkoutUrl).row();
+    if (order.payment.pixCopyPaste) addCopyPixButton(ctx, kb, order.payment.pixCopyPaste);
     kb.text(ctx.tr("check_status"), `st:${order.orderId}`).row().text(ctx.tr("cancel_order"), `cx:${order.orderId}`);
 
     if (order.payment.pixCopyPaste) {
@@ -234,7 +286,7 @@ async function startCheckout(ctx: StoreContext, productId: string, methodKey: st
       return ctx.reply(
         ctx.tr("insufficient_balance", {
           balance: formatMoney(err.balanceCents, "USD", ctx.locale),
-          price: formatMoney((product?.priceUsdCents ?? 0) * quantity, "USD", ctx.locale),
+          price: formatMoney(product ? productUnitCents(product, "USD", quantity) * quantity : 0, "USD", ctx.locale),
         }),
         { reply_markup: new InlineKeyboard().text(ctx.tr("deposit_button"), "dep:new") },
       );
@@ -283,6 +335,7 @@ async function showOrder(ctx: StoreContext, orderId: string) {
   const kb = new InlineKeyboard();
   if (order.status === "PENDING") {
     if (order.payment?.checkoutUrl && !order.payment.pixCopyPaste) kb.url(ctx.tr("pay_button"), order.payment.checkoutUrl).row();
+    if (order.payment?.pixCopyPaste) addCopyPixButton(ctx, kb, order.payment.pixCopyPaste);
     kb.text(ctx.tr("check_status"), `st:${order.id}`).row().text(ctx.tr("cancel_order"), `cx:${order.id}`);
   }
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
@@ -486,17 +539,26 @@ export function createBot(): Bot<StoreContext> {
     await ctx.answerCallbackQuery({ text: ctx.tr(on ? "notify_me_subscribed" : "notify_me_cancelled") });
     await ctx.editMessageReplyMarkup({ reply_markup: stockAlertKeyboard(ctx, productId, on) }).catch(() => undefined);
   });
-  bot.callbackQuery(/^qty:(\w+):(\d{1,2})$/, async (ctx) => {
+  bot.callbackQuery(/^qty:(\w+):(\d{1,3})$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const quantity = Number(ctx.match[2]);
     if (quantity < 1 || quantity > MAX_QUANTITY_PER_ORDER) return;
     await showPaymentMethods(ctx, ctx.match[1]!, quantity);
   });
-  bot.callbackQuery(/^pay:(\w+):(\d{1,2}):([a-z0-9_]+)$/, async (ctx) => {
+  bot.callbackQuery(/^pay:(\w+):(\d{1,3}):([a-z0-9_]+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const quantity = Number(ctx.match[2]);
     if (quantity < 1 || quantity > MAX_QUANTITY_PER_ORDER) return;
     await startCheckout(ctx, ctx.match[1]!, ctx.match[3]!, quantity);
+  });
+  bot.callbackQuery(/^qc:(\w+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const product = await db().product.findFirst({ where: { id: ctx.match[1]!, isActive: true, deletedAt: null } });
+    if (!product) return ctx.reply(ctx.tr("no_products"));
+    const max = Math.min(await sellableStock(product), MAX_QUANTITY_PER_ORDER);
+    if (max <= 0) return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, product.id, await hasStockAlert(ctx.user.id, product.id)) });
+    await setBotState(ctx.user.id, { await: "quantity", productId: product.id });
+    await ctx.reply(ctx.tr("custom_quantity_prompt", { max }));
   });
   // Buttons sent before quantities existed (no quantity in the data) buy a single unit.
   bot.callbackQuery(/^pay:(\w+):([a-z0-9_]+)$/, async (ctx) => {
@@ -560,6 +622,7 @@ export function createBot(): Bot<StoreContext> {
     if (isMenu(text, "menu_language")) return ctx.reply(t(ctx.locale, "lang_prompt"), { reply_markup: languageKeyboard });
 
     const state = ctx.user.botState as BotState;
+    if (state?.await === "quantity") return handleCustomQuantity(ctx, state.productId, text);
     if (state?.await === "deposit_amount") {
       const cents = parseMoneyToCents(text);
       if (cents === null) return replyDepositError(ctx, "INVALID_AMOUNT");

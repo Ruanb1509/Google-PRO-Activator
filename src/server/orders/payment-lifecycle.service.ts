@@ -9,7 +9,8 @@ import { deliverOrder } from "@/server/notifications/delivery.service";
 import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
 import { availableStock } from "@/server/products/products.service";
 import { getSettings } from "@/server/settings/settings.service";
-import { alertSupplierFailure, fulfillFromSupplier, type SupplierOutcome } from "@/server/supplier/supplier.service";
+import { alertSupplierFailure, customerLabel, fulfillFromSupplier, type SupplierOutcome } from "@/server/supplier/supplier.service";
+import { formatMoney } from "@/server/common/money";
 import type { PaymentStatusResult } from "@/server/payments/payment-provider";
 
 type Outcome =
@@ -115,6 +116,7 @@ export async function markRefunded(tx: Tx, args: { orderId: string; paymentId: s
 async function afterCommit(outcome: Outcome): Promise<void> {
   try {
     if (outcome.kind === "paid") {
+      await alertSale(outcome.orderId).catch((err) => logger.warn("payment.sale_alert_failed", { err, orderId: outcome.orderId }));
       if (outcome.fullyAssigned) {
         await deliverOrder(outcome.orderId);
         await checkLowStock(outcome.productId);
@@ -144,6 +146,20 @@ async function afterCommit(outcome: Outcome): Promise<void> {
     // Delivery is retried by maintenance; nothing here may undo the committed payment.
     logger.error("payment.after_commit_failed", { err, outcome });
   }
+}
+
+/** "New sale" alert to the admins for every paid order: who bought what, for how much. */
+async function alertSale(orderId: string): Promise<void> {
+  const order = await db().order.findUniqueOrThrow({ where: { id: orderId }, include: { user: true } });
+  await alertAdmins(
+    [
+      "💰 <b>Nova venda!</b>",
+      "",
+      `👤 Cliente: ${customerLabel(order.user)}`,
+      `📦 Produto: <b>${escapeHtml(order.productName)}</b> × ${order.quantity}`,
+      `🧾 Pedido <b>#${order.number}</b> · ${formatMoney(order.amountCents, order.currency)} via ${escapeHtml(order.paymentMethod)}`,
+    ].join("\n"),
+  );
 }
 
 async function checkLowStock(productId: string): Promise<void> {

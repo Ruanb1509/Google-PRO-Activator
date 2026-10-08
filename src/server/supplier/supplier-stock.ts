@@ -36,7 +36,9 @@ export function supplierUnitsFrom(catalog: Map<string, PartnerProduct>, product:
   const item = catalog.get(product.supplierSlug);
   if (!item?.stock.inStock) return 0;
   if (usdToCents(item.yourPrice) > supplierMaxCost(product)) return 0;
-  return Math.max(0, item.stock.count);
+  // One supplier purchase covers a whole order: never offer more than it sells per order.
+  const perOrder = item.stock.maxQuantity > 0 ? item.stock.maxQuantity : item.stock.count;
+  return Math.max(0, Math.min(item.stock.count, perOrder));
 }
 
 /**

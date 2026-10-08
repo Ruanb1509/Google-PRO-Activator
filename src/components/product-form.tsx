@@ -5,6 +5,7 @@ import { centsToInput, toCents } from "@/lib/api";
 import type { Product } from "@/lib/types";
 import { Button, ErrorBox, Field } from "@/components/ui";
 import { LogoPicker, type LogoValue } from "@/components/logo-picker";
+import { bulkDiscountTiers, formatBulkDiscounts, parseBulkDiscounts, type BulkDiscount } from "@/lib/bulk-discounts";
 
 export interface ProductPayload {
   name: string;
@@ -22,6 +23,7 @@ export interface ProductPayload {
   logoImage?: string | null;
   supplierSlug: string | null;
   supplierMaxCostCents: number | null;
+  bulkDiscounts: BulkDiscount[];
 }
 
 export function ProductForm({
@@ -47,6 +49,7 @@ export function ProductForm({
   const [sortOrder, setSortOrder] = useState(String(initial?.sortOrder ?? 0));
   const [supplierSlug, setSupplierSlug] = useState(initial?.supplierSlug ?? "");
   const [supplierMaxCost, setSupplierMaxCost] = useState(centsToInput(initial?.supplierMaxCostCents));
+  const [bulkDiscounts, setBulkDiscounts] = useState(formatBulkDiscounts(bulkDiscountTiers(initial?.bulkDiscounts)));
   const [logo, setLogo] = useState<LogoValue>({ logoKey: initial?.logoKey ?? null, logoImage: undefined });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -61,6 +64,12 @@ export function ProductForm({
     if (threshold && !/^\d+$/.test(threshold)) return setError("Limite de estoque baixo inválido");
     const supplierMaxCostCents = supplierMaxCost.trim() ? toCents(supplierMaxCost) : null;
     if (supplierMaxCostCents !== null && (!supplierMaxCostCents || supplierMaxCostCents <= 0)) return setError("Custo máximo no fornecedor inválido");
+    let tiers: BulkDiscount[];
+    try {
+      tiers = parseBulkDiscounts(bulkDiscounts);
+    } catch (err) {
+      return setError(err instanceof Error ? err.message : String(err));
+    }
     setSaving(true);
     try {
       await onSubmit({
@@ -76,6 +85,7 @@ export function ProductForm({
         sortOrder: Number(sortOrder) || 0,
         supplierSlug: supplierSlug.trim() || null,
         supplierMaxCostCents,
+        bulkDiscounts: tiers,
         logoKey: logo.logoKey,
         ...(logo.logoImage !== undefined ? { logoImage: logo.logoImage } : {}),
       });
@@ -127,6 +137,9 @@ export function ProductForm({
         </Field>
         <Field label="Custo máximo no fornecedor (US$)" hint="Acima disso não compra. Vazio = o preço exterior.">
           <input className="input" inputMode="decimal" value={supplierMaxCost} onChange={(e) => setSupplierMaxCost(e.target.value)} placeholder="= preço exterior" />
+        </Field>
+        <Field label="Desconto por quantidade" hint="quantidade:porcentagem — ex.: 5:11, 11:22, 25:33 (a partir de 5 un. 11% off...). Máx. 50%. Vazio = sem desconto.">
+          <input className="input" value={bulkDiscounts} onChange={(e) => setBulkDiscounts(e.target.value)} placeholder="sem desconto" />
         </Field>
         <label className="flex items-center gap-2 self-end pb-2 text-sm">
           <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} /> Produto ativo (visível no bot)

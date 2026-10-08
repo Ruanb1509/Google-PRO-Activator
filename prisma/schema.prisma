@@ -140,6 +140,7 @@ model Product {
   logoEmojiVersion     String?   @map("logo_emoji_version") /// hash of the logo the emoji was generated from
   supplierSlug         String?   @map("supplier_slug") /// Partner API product slug bought when the local stock runs out
   supplierMaxCostCents Int?      @map("supplier_max_cost_cents") /// most paid to the supplier per unit (USD cents); null = the USD sale price
+  bulkDiscounts        Json?     @map("bulk_discounts") /// quantity discounts [{ minQty, percentOff }] (see src/lib/bulk-discounts.ts)
   deletedAt            DateTime? @map("deleted_at") /// soft delete keeps order history intact
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")

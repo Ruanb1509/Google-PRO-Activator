@@ -174,7 +174,7 @@ type AlertOrder = {
 };
 
 /** "Name (@user) · ID 123", linking to the customer's Telegram profile. */
-function customerLabel(user: AlertOrder["user"]): string {
+export function customerLabel(user: AlertOrder["user"]): string {
   const name = escapeHtml(user.firstName || "Cliente");
   const handle = user.username ? ` (@${escapeHtml(user.username)})` : "";
   return `<a href="tg://user?id=${user.telegramId}">${name}</a>${handle} · ID <code>${user.telegramId}</code>`;

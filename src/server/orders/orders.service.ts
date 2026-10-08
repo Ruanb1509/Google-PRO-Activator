@@ -1,4 +1,5 @@
 import type { Prisma, User } from "@/generated/prisma/client";
+import { productUnitCents } from "@/lib/bulk-discounts";
 import type { OrderStatus } from "@/generated/prisma/enums";
 import { db } from "@/server/common/db";
 import { AppError, Errors } from "@/server/common/errors";
@@ -19,7 +20,7 @@ import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import type { CreatePaymentResult } from "@/server/payments/payment-provider";
 
 /** Most units of one product a customer can buy in a single order (keeps the delivery message short). */
-export const MAX_QUANTITY_PER_ORDER = 10;
+export const MAX_QUANTITY_PER_ORDER = 100;
 
 /** Enabled methods whose provider is configured, customer-locale suggestions first. */
 export async function availablePaymentMethods(locale: "pt_BR" | "en_US"): Promise<PaymentMethodConfig[]> {
@@ -100,7 +101,7 @@ export async function createOrder(user: User, productId: string, methodKey: stri
   await assertPendingLimit(db());
 
   const currency = method.currency;
-  const amountCents = (currency === "BRL" ? product.priceBrlCents : product.priceUsdCents) * quantity;
+  const amountCents = productUnitCents(product, currency, quantity) * quantity; // quantity discount applied
   if (method.provider === "balance" && user.balanceCents < amountCents) throw new InsufficientBalanceError(user.balanceCents);
 
   // The order (and the stock it reserves) expires after `orderTtlMinutes`. Some providers require longer
