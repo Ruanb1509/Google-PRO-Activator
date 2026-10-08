@@ -115,6 +115,9 @@
   "quantity_discount": "🎁 Desconto por quantidade: <b>-{percent}%</b> ({price} cada)",
   "promo_bulk_discount": "🎁 <b>Promoção: {name}</b>\n\nAgora com <b>desconto por quantidade</b> — quanto mais você leva, menos paga por unidade:\n\n{lines}\n\nPagamento via PIX com entrega automática aqui no chat. 👇",
   "promo_view_product": "🛒 Aproveitar agora",
+  "card_surcharge_notice": "💳 O valor no cartão inclui acréscimo de <b>{percent}%</b> (taxa do cartão). No PIX não há acréscimo.",
+  "card_installments_notice": "📆 Parcele em até <b>12×</b>: os juros das parcelas são do Mercado Pago, pagos por você, e aparecem na tela de pagamento antes de confirmar. À vista (1×) não tem juros.",
+  "payment_methods_surcharge_note": "ℹ️ {method}: acréscimo de {percent}% (taxa do cartão) já incluído no valor.",
   "quantity_button": "{quantity} un.",
   "not_enough_stock": "😕 Só temos <b>{stock}</b> unidade(s) disponível(is) agora. Escolha uma quantidade menor."
 }

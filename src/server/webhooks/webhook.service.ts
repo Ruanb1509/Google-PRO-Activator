@@ -58,7 +58,8 @@ export async function processWebhook(providerName: string, req: Request, ip: str
   }
 
   const payment = wh.providerPaymentId
-    ? await db().payment.findFirst({ where: { provider: providerName, providerPaymentId: wh.providerPaymentId } })
+    ? ((await db().payment.findFirst({ where: { provider: providerName, providerPaymentId: wh.providerPaymentId } })) ??
+      (await linkedPayment(providerName, wh.providerPaymentId)))
     : wh.providerReference
       ? await db().payment.findFirst({ where: { provider: providerName, providerReference: wh.providerReference } })
       : null;
@@ -69,7 +70,8 @@ export async function processWebhook(providerName: string, req: Request, ip: str
   }
 
   try {
-    const status = await provider.getPaymentStatus(payment.providerPaymentId);
+    // The payment's own provider (a linked one, e.g. Mercado Pago card, may be notified here).
+    const status = await (findProvider(payment.provider) ?? provider).getPaymentStatus(payment.providerPaymentId);
     const outcome = await applyPaymentStatus(payment.id, status, { actorType: "WEBHOOK" });
     await db().paymentEvent.update({ where: { id: event.id }, data: { processedAt: new Date(), paymentId: payment.id, error: null } });
     return { status: 200, body: { ok: true, result: outcome.kind } };
@@ -80,6 +82,19 @@ export async function processWebhook(providerName: string, req: Request, ip: str
     // 500 => the provider retries later; reprocessing is safe (idempotent).
     return { status: 500, body: { error: "processing failed" } };
   }
+}
+
+/**
+ * A payment notified on this webhook that belongs to a linked provider (e.g. a Mercado Pago card
+ * payment made on a Checkout Pro page): found through the order id the provider API reports.
+ */
+async function linkedPayment(providerName: string, providerPaymentId: string) {
+  const provider = findProvider(providerName);
+  if (!provider?.resolveOrderId) return null;
+  const orderId = await provider.resolveOrderId(providerPaymentId);
+  if (!orderId) return null;
+  const payment = await db().payment.findUnique({ where: { orderId } });
+  return payment && findProvider(payment.provider)?.notifiedVia === providerName ? payment : null;
 }
 
 export async function listWebhookEvents(f: { provider?: string; onlyErrors?: boolean; page: number; pageSize: number }) {

@@ -16,6 +16,7 @@ interface PaymentMethod {
   labelPt: string;
   labelEn: string;
   suggestedForLocales: Locale[];
+  surchargePercent: number;
 }
 
 interface StoreSettings {
@@ -44,7 +45,7 @@ interface SettingsResponse {
   integrations: { binancePay: { configured: boolean; payId: string | null }; mockPayments: boolean; telegramBot: string };
 }
 
-const PROVIDER_LABELS: Record<string, string> = { mercadopago: "Mercado Pago (PIX)", stripe: "Stripe (cartão)", balance: "Saldo interno", mock: "Mock (teste)" };
+const PROVIDER_LABELS: Record<string, string> = { mercadopago: "Mercado Pago (PIX)", mercadopago_card: "Mercado Pago (cartão de crédito)", stripe: "Stripe (cartão)", balance: "Saldo interno", mock: "Mock (teste)" };
 
 export default function SettingsPage() {
   const { data, error, loading, reload } = useApi<SettingsResponse>("/api/admin/settings");
@@ -148,7 +149,7 @@ export default function SettingsPage() {
                   update({
                     paymentMethods: [
                       ...s.paymentMethods,
-                      { key: `metodo_${s.paymentMethods.length + 1}`, provider: "stripe", currency: "USD", enabled: false, labelPt: "Novo método", labelEn: "New method", suggestedForLocales: [] },
+                      { key: `metodo_${s.paymentMethods.length + 1}`, provider: "stripe", currency: "USD", enabled: false, labelPt: "Novo método", labelEn: "New method", suggestedForLocales: [], surchargePercent: 0 },
                     ],
                   })
                 }
@@ -163,7 +164,7 @@ export default function SettingsPage() {
           </p>
           <div className="space-y-3">
             {s.paymentMethods.map((m, i) => (
-              <fieldset key={i} disabled={ro} className="grid gap-3 rounded-lg border border-line p-3 sm:grid-cols-2 lg:grid-cols-7 lg:items-end">
+              <fieldset key={i} disabled={ro} className="grid gap-3 rounded-lg border border-line p-3 sm:grid-cols-2 lg:grid-cols-8 lg:items-end">
                 <div className="flex items-center gap-2 lg:col-span-1">
                   <Toggle checked={m.enabled} onChange={(v) => updateMethod(i, { enabled: v })} disabled={ro} label="Ativo" />
                   <span className="text-sm">{m.enabled ? "Ativo" : "Inativo"}</span>
@@ -192,6 +193,17 @@ export default function SettingsPage() {
                 <Field label="Rótulo (en-US)">
                   <input className="input" maxLength={40} value={m.labelEn} onChange={(e) => updateMethod(i, { labelEn: e.target.value })} />
                 </Field>
+                <Field label="Acréscimo (%)" hint="Somado ao valor neste método (ex.: taxa do cartão)">
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={30}
+                    step={0.01}
+                    value={m.surchargePercent ?? 0}
+                    onChange={(e) => updateMethod(i, { surchargePercent: Math.min(30, Math.max(0, Number(e.target.value) || 0)) })}
+                  />
+                </Field>
                 <div className="flex flex-wrap items-center gap-3 text-xs">
                   {(["pt_BR", "en_US"] as Locale[]).map((l) => (
                     <label key={l} className="flex items-center gap-1">
@@ -214,7 +226,7 @@ export default function SettingsPage() {
                   )}
                 </div>
                 {m.enabled && !providerOk(m.provider) && (
-                  <div className="text-xs text-warn sm:col-span-2 lg:col-span-7">⚠️ Provedor não configurado no servidor — este método não aparecerá no bot.</div>
+                  <div className="text-xs text-warn sm:col-span-2 lg:col-span-8">⚠️ Provedor não configurado no servidor — este método não aparecerá no bot.</div>
                 )}
               </fieldset>
             ))}

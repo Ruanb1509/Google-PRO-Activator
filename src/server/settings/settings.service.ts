@@ -15,6 +15,8 @@ export const paymentMethodSchema = z.object({
   labelEn: z.string().min(1).max(40),
   /** Languages for which this method is listed first (suggestion only, never a restriction). */
   suggestedForLocales: z.array(z.enum(["pt_BR", "en_US"])).default([]),
+  /** Extra charged on this method, in % of the order (e.g. the card fee, so the customer pays it). */
+  surchargePercent: z.number().min(0).max(30).default(0),
 });
 export type PaymentMethodConfig = z.infer<typeof paymentMethodSchema>;
 
@@ -49,10 +51,11 @@ export type StoreSettings = z.infer<typeof storeSettingsSchema>;
 
 export const DEFAULT_SETTINGS: StoreSettings = {
   paymentMethods: [
-    { key: "pix", provider: "mercadopago", currency: "BRL", enabled: true, labelPt: "PIX", labelEn: "PIX (Brazil)", suggestedForLocales: ["pt_BR"] },
-    { key: "card", provider: "stripe", currency: "USD", enabled: true, labelPt: "Cartão internacional", labelEn: "Card", suggestedForLocales: ["en_US"] },
-    { key: "balance", provider: "balance", currency: "USD", enabled: true, labelPt: "Saldo da conta", labelEn: "Account balance", suggestedForLocales: [] },
-    { key: "mock", provider: "mock", currency: "BRL", enabled: false, labelPt: "Pagamento de teste", labelEn: "Test payment", suggestedForLocales: [] },
+    { key: "pix", provider: "mercadopago", currency: "BRL", enabled: true, labelPt: "PIX", labelEn: "PIX (Brazil)", suggestedForLocales: ["pt_BR"], surchargePercent: 0 },
+    { key: "mp_card", provider: "mercadopago_card", currency: "BRL", enabled: true, labelPt: "Cartão de crédito", labelEn: "Credit card (Brazil)", suggestedForLocales: [], surchargePercent: 4.99 },
+    { key: "card", provider: "stripe", currency: "USD", enabled: true, labelPt: "Cartão internacional", labelEn: "Card", suggestedForLocales: ["en_US"], surchargePercent: 0 },
+    { key: "balance", provider: "balance", currency: "USD", enabled: true, labelPt: "Saldo da conta", labelEn: "Account balance", suggestedForLocales: [], surchargePercent: 0 },
+    { key: "mock", provider: "mock", currency: "BRL", enabled: false, labelPt: "Pagamento de teste", labelEn: "Test payment", suggestedForLocales: [], surchargePercent: 0 },
   ],
   brlCountries: ["BR"],
   lowStockThreshold: 10,

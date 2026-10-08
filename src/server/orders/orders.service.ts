@@ -22,6 +22,12 @@ import type { CreatePaymentResult } from "@/server/payments/payment-provider";
 /** Most units of one product a customer can buy in a single order (keeps the delivery message short). */
 export const MAX_QUANTITY_PER_ORDER = 100;
 
+/** Amount charged for `quantity` units with this method: quantity discount, then the method's surcharge (e.g. card fee). */
+export function methodAmountCents(product: { priceBrlCents: number; priceUsdCents: number; bulkDiscounts?: unknown }, method: Pick<PaymentMethodConfig, "currency" | "surchargePercent">, quantity: number): number {
+  const subtotal = productUnitCents(product, method.currency, quantity) * quantity;
+  return Math.round((subtotal * (100 + (method.surchargePercent ?? 0))) / 100);
+}
+
 /** Enabled methods whose provider is configured, customer-locale suggestions first. */
 export async function availablePaymentMethods(locale: "pt_BR" | "en_US"): Promise<PaymentMethodConfig[]> {
   const settings = await getSettings();
@@ -101,7 +107,7 @@ export async function createOrder(user: User, productId: string, methodKey: stri
   await assertPendingLimit(db());
 
   const currency = method.currency;
-  const amountCents = productUnitCents(product, currency, quantity) * quantity; // quantity discount applied
+  const amountCents = methodAmountCents(product, method, quantity);
   if (method.provider === "balance" && user.balanceCents < amountCents) throw new InsufficientBalanceError(user.balanceCents);
 
   // The order (and the stock it reserves) expires after `orderTtlMinutes`. Some providers require longer

@@ -88,6 +88,8 @@ export interface PaymentProvider {
   readonly minTtlMinutes?: number;
   /** Whether it receives webhooks (internal providers like "balance" do not). */
   readonly usesWebhooks: boolean;
+  /** Its payments are notified on another provider's webhook (e.g. Mercado Pago card -> "mercadopago"). */
+  readonly notifiedVia?: string;
 
   isConfigured(): boolean;
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
@@ -97,4 +99,6 @@ export interface PaymentProvider {
   refundPayment(providerPaymentId: string, ctx: { orderId: string; amountCents: number; providerReference?: string | null }): Promise<RefundResult>;
   /** Optional: invalidate a checkout so a late payment cannot happen after the order expired. */
   cancelPayment?(providerPaymentId: string): Promise<void>;
+  /** Optional: order id of a payment notified on this webhook that is not one of its own charges. */
+  resolveOrderId?(providerPaymentId: string): Promise<string | null>;
 }

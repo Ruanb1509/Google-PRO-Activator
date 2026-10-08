@@ -13,9 +13,9 @@ import {
   type WebhookResult,
 } from "@/server/payments/payment-provider";
 
-const API = "https://api.mercadopago.com";
+export const MP_API = "https://api.mercadopago.com";
 
-interface MpPayment {
+export interface MpPayment {
   id: number;
   status: string;
   status_detail?: string;
@@ -23,6 +23,8 @@ interface MpPayment {
   currency_id: string;
   external_reference?: string;
   payment_method_id?: string;
+  payment_type_id?: string;
+  date_created?: string;
   point_of_interaction?: { transaction_data?: { qr_code?: string; qr_code_base64?: string; ticket_url?: string } };
 }
 
@@ -45,7 +47,7 @@ export function mapMercadoPagoStatus(status: string): PaymentStatus {
 }
 
 /** Mercado Pago expects ISO-8601 with an explicit offset, e.g. 2026-09-24T20:00:00.000-03:00 */
-function mpDate(d: Date): string {
+export function mpDate(d: Date): string {
   const brt = new Date(d.getTime() - 3 * 60 * 60 * 1000);
   return brt.toISOString().replace("Z", "-03:00");
 }
@@ -78,18 +80,18 @@ export function verifyMercadoPagoSignature(args: { secret: string; xSignature: s
 }
 
 export class MercadoPagoProvider implements PaymentProvider {
-  readonly name = "mercadopago";
+  readonly name: string = "mercadopago";
   readonly supportedCurrencies = ["BRL"] as const;
-  readonly usesWebhooks = true;
-  readonly minTtlMinutes = 35; // Pix date_of_expiration must be at least 30 minutes after creation (margin for latency)
+  readonly usesWebhooks: boolean = true;
+  readonly minTtlMinutes: number = 35; // Pix date_of_expiration must be at least 30 minutes after creation (margin for latency)
 
   isConfigured(): boolean {
     const e = env();
     return Boolean(e.MERCADOPAGO_ACCESS_TOKEN && e.MERCADOPAGO_WEBHOOK_SECRET && e.MERCADOPAGO_PAYER_EMAIL);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, idempotencyKey?: string): Promise<T> {
-    const res = await fetch(`${API}${path}`, {
+  protected async request<T>(method: string, path: string, body?: unknown, idempotencyKey?: string): Promise<T> {
+    const res = await fetch(`${MP_API}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${env().MERCADOPAGO_ACCESS_TOKEN}`,
@@ -175,6 +177,12 @@ export class MercadoPagoProvider implements PaymentProvider {
       ignore: type !== "payment",
       payload: body,
     };
+  }
+
+  /** Order of a Mercado Pago payment (`external_reference`): finds card payments notified on this webhook. */
+  async resolveOrderId(mpPaymentId: string): Promise<string | null> {
+    const p = await this.request<MpPayment>("GET", `/v1/payments/${encodeURIComponent(mpPaymentId)}`);
+    return p.external_reference ?? null;
   }
 
   async refundPayment(providerPaymentId: string, ctx: { orderId: string }): Promise<RefundResult> {

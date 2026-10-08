@@ -11,8 +11,8 @@ import { allTranslations, detectLocale, formatItems, t, type MessageKey } from "
 import { bulkDiscountTiers, bulkPercentOff, discountedUnitCents, productUnitCents } from "@/lib/bulk-discounts";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
 import { listProducts, sellableStock, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
-import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, MAX_QUANTITY_PER_ORDER, syncOrderPayment } from "@/server/orders/orders.service";
-import { getSettings } from "@/server/settings/settings.service";
+import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, MAX_QUANTITY_PER_ORDER, methodAmountCents, syncOrderPayment } from "@/server/orders/orders.service";
+import { getSettings, type PaymentMethodConfig } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, DepositError, type DepositErrorCode } from "@/server/wallet/deposit.service";
 import { getOpenTicket } from "@/server/support/support.service";
@@ -222,11 +222,12 @@ async function showPaymentMethods(ctx: StoreContext, productId: string, quantity
   if (!methods.length) return ctx.reply(ctx.tr("no_payment_methods"));
   const kb = new InlineKeyboard();
   for (const m of methods) {
-    const total = productUnitCents(product, m.currency, quantity) * quantity;
-    const label = ctx.locale === "pt_BR" ? m.labelPt : m.labelEn;
+    const total = methodAmountCents(product, m, quantity);
+    const label = methodLabel(ctx, m);
     kb.text(`${label} — ${formatMoney(total, m.currency, ctx.locale)}`, `pay:${product.id}:${quantity}:${m.key}`).row();
   }
   kb.text(ctx.tr("back"), `p:${product.id}`);
+  const surchargeNotes = methods.filter((m) => m.surchargePercent > 0).map((m) => ctx.tr("payment_methods_surcharge_note", { method: methodLabel(ctx, m), percent: percentText(ctx, m.surchargePercent) }));
   let summary = ctx.tr("quantity_summary", { product: localizedName(product, ctx.locale), quantity });
   const tiers = bulkDiscountTiers(product.bulkDiscounts);
   const percent = bulkPercentOff(tiers, quantity);
@@ -237,7 +238,8 @@ async function showPaymentMethods(ctx: StoreContext, productId: string, quantity
     });
     summary += `\n${ctx.tr("quantity_discount", { percent: ctx.locale === "pt_BR" ? String(percent).replace(".", ",") : percent, price: each })}`;
   }
-  await ctx.reply(`${summary}\n\n${ctx.tr("choose_payment")}`, { parse_mode: "HTML", reply_markup: kb });
+  const notes = surchargeNotes.length ? `\n\n${surchargeNotes.join("\n")}` : "";
+  await ctx.reply(`${summary}\n\n${ctx.tr("choose_payment")}${notes}`, { parse_mode: "HTML", reply_markup: kb });
 }
 
 function stockAlertKeyboard(ctx: StoreContext, productId: string, subscribed: boolean) {
@@ -248,6 +250,22 @@ function stockAlertKeyboard(ctx: StoreContext, productId: string, subscribed: bo
 function addCopyPixButton(ctx: StoreContext, kb: InlineKeyboard, code: string) {
   if (code.length > 256) return;
   kb.copyText(ctx.tr("copy_pix_button"), code).style("primary").row();
+}
+
+function methodLabel(ctx: StoreContext, m: PaymentMethodConfig): string {
+  return ctx.locale === "pt_BR" ? m.labelPt : m.labelEn;
+}
+
+/** 4.99 -> "4,99" in Portuguese. */
+function percentText(ctx: StoreContext, percent: number): string {
+  return ctx.locale === "pt_BR" ? String(percent).replace(".", ",") : String(percent);
+}
+
+/** Card checkout: the surcharge already in the amount and who pays the installment interest. */
+function cardNotice(ctx: StoreContext, method: PaymentMethodConfig): string {
+  const lines = method.surchargePercent > 0 ? [ctx.tr("card_surcharge_notice", { percent: percentText(ctx, method.surchargePercent) })] : [];
+  if (method.provider === "mercadopago_card") lines.push(ctx.tr("card_installments_notice"));
+  return lines.length ? `\n\n${lines.join("\n\n")}` : "";
 }
 
 async function startCheckout(ctx: StoreContext, productId: string, methodKey: string, quantity: number) {
@@ -279,7 +297,7 @@ async function startCheckout(ctx: StoreContext, productId: string, methodKey: st
       }
       return ctx.reply(caption, { parse_mode: "HTML", reply_markup: kb });
     }
-    return ctx.reply(`${header}\n\n${ctx.tr("checkout_instructions")}`, { parse_mode: "HTML", reply_markup: kb });
+    return ctx.reply(`${header}${cardNotice(ctx, order.method)}\n\n${ctx.tr("checkout_instructions")}`, { parse_mode: "HTML", reply_markup: kb });
   } catch (err) {
     if (err instanceof InsufficientBalanceError) {
       const product = await db().product.findUnique({ where: { id: productId } });

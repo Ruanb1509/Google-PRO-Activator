@@ -115,6 +115,9 @@
   "quantity_discount": "🎁 Bulk discount: <b>-{percent}%</b> ({price} each)",
   "promo_bulk_discount": "🎁 <b>Deal: {name}</b>\n\nNow with <b>bulk discounts</b> — the more you buy, the less you pay per unit:\n\n{lines}\n\nAutomatic delivery right here in the chat. 👇",
   "promo_view_product": "🛒 Get it now",
+  "card_surcharge_notice": "💳 The card amount includes a <b>{percent}%</b> surcharge (card fee). PIX has no surcharge.",
+  "card_installments_notice": "📆 Pay in up to <b>12 installments</b>: installment interest is charged by Mercado Pago, paid by you, and shown on the payment page before you confirm. A single payment (1×) has no interest.",
+  "payment_methods_surcharge_note": "ℹ️ {method}: {percent}% surcharge (card fee) already included.",
   "quantity_button": "{quantity} pcs",
   "not_enough_stock": "😕 Only <b>{stock}</b> unit(s) available right now. Please choose a smaller quantity."
 }
