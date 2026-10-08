@@ -77,18 +77,44 @@ type ButtonLook = "icons" | "colors" | "plain";
 const BUTTON_LOOKS: ButtonLook[] = ["icons", "colors", "plain"];
 let buttonLook: ButtonLook = "icons";
 
+/**
+ * Splits buttons into rows of up to 3 (like a service grid), keeping each label readable on a phone:
+ * 3 per row while every label in it is short, 2 while they are medium, 1 for long ones.
+ */
+function gridRows<T extends { label: string }>(buttons: T[]): T[][] {
+  const perRow = (len: number) => (len <= 14 ? 3 : len <= 22 ? 2 : 1);
+  const rows: T[][] = [];
+  let row: T[] = [];
+  let cap = 3; // most buttons the current row can hold
+  for (const b of buttons) {
+    const len = b.label.length;
+    if (row.length && row.length >= Math.min(cap, perRow(len))) {
+      rows.push(row);
+      row = [];
+      cap = 3;
+    }
+    cap = Math.min(cap, perRow(len));
+    row.push(b);
+  }
+  if (row.length) rows.push(row);
+  return rows;
+}
+
 async function showProducts(ctx: StoreContext) {
   // Sold-out products stay listed (at the end, in red) so customers can ask to be notified when they are back.
   const products = (await listProducts()).sort((a, b) => Number(b.sellable > 0) - Number(a.sellable > 0));
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
   const price = await priceFormatter(ctx.locale);
-  // "Name [stock][price]" with the service logo on the left; green when it can be bought, red when sold out.
+  // Grid of "Name · price" buttons with the service logo on the left; sold-out ones in red.
+  const buttons = products.map((p) => ({ p, label: `${localizedName(p, ctx.locale)} · ${price(p)}` }));
   const keyboard = (look: ButtonLook) => {
     const kb = new InlineKeyboard();
-    for (const p of products) {
-      kb.text(`${localizedName(p, ctx.locale)} [${p.sellable}][${price(p)}]`, `p:${p.id}`);
-      if (look !== "plain") kb.style(p.sellable > 0 ? "success" : "danger");
-      if (look === "icons" && p.buttonEmojiId) kb.icon(p.buttonEmojiId);
+    for (const row of gridRows(buttons)) {
+      for (const { p, label } of row) {
+        kb.text(label, `p:${p.id}`);
+        if (look !== "plain" && p.sellable <= 0) kb.style("danger");
+        if (look === "icons" && p.buttonEmojiId) kb.icon(p.buttonEmojiId);
+      }
       kb.row();
     }
     return kb;
