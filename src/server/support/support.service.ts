@@ -9,8 +9,7 @@ import { rateLimit } from "@/server/common/rate-limit";
 import { escapeHtml, t } from "@/i18n";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { alertAdmins, sendHtml, telegramApi } from "@/server/notifications/telegram";
-import { decrypt } from "@/server/common/crypto";
-import { deliveryMessageHtml } from "@/server/notifications/delivery.service";
+import { getOrderDelivery } from "@/server/notifications/delivery.service";
 
 export const MAX_MESSAGE_LENGTH = 3500;
 
@@ -152,54 +151,13 @@ export async function getTicket(id: string) {
   };
 }
 
-/**
- * What the customer actually received for one of their orders: the clear links/codes (no masking) and the
- * delivery message rendered with the same template and language the bot used. Defaults to the ticket's order;
- * `orderId` may point to any other order of the same customer. Every view is audited.
- */
+/** What the customer received for the ticket's order (or `orderId`, another order of the same customer). */
 export async function getTicketDelivery(ticketId: string, orderId: string | null, adminId: string, ip: string | null) {
-  const ticket = await db().supportTicket.findUnique({ where: { id: ticketId }, select: { id: true, number: true, userId: true, orderId: true } });
+  const ticket = await db().supportTicket.findUnique({ where: { id: ticketId }, select: { number: true, userId: true, orderId: true } });
   if (!ticket) throw Errors.notFound("Ticket");
   const targetId = orderId ?? ticket.orderId;
   if (!targetId) return null;
-  const order = await db().order.findFirst({
-    where: { id: targetId, userId: ticket.userId },
-    include: {
-      user: { select: { locale: true } },
-      product: { select: { name: true, nameEn: true } },
-      inventoryItems: { where: { status: "SOLD" }, orderBy: { createdAt: "asc" }, select: { valueEncrypted: true } },
-      events: { where: { type: { in: ["DELIVERED", "DELIVERY_RESENT", "DELIVERY_FAILED"] } }, orderBy: { createdAt: "asc" }, select: { type: true, actorType: true, message: true, createdAt: true } },
-    },
-  });
-  if (!order) throw Errors.notFound("Order");
-
-  const items = order.inventoryItems.map((i) => decrypt(i.valueEncrypted));
-  // Same rule as the delivery: the locale the customer has now, falling back to the order's.
-  const locale = order.user.locale ?? order.locale;
-  const complete = items.length >= order.quantity;
-  await audit({
-    actorType: "ADMIN",
-    adminId,
-    ip,
-    action: AuditActions.SUPPORT_DELIVERY_VIEWED,
-    resourceType: "order",
-    resourceId: order.id,
-    details: { ticket: ticket.number, order: order.number, items: items.length },
-  });
-  return {
-    orderId: order.id,
-    number: order.number,
-    productName: order.productName,
-    quantity: order.quantity,
-    status: order.status,
-    paidAt: order.paidAt,
-    deliveredAt: order.deliveredAt,
-    deliveryError: order.deliveryError,
-    locale,
-    items,
-    messageHtml: complete ? deliveryMessageHtml(order, items, locale) : null,
-    events: order.events,
-  };
+  return getOrderDelivery(targetId, { adminId, ip, via: "support", ticket: ticket.number, userId: ticket.userId });
 }
 
 /** Support reply: stored, then delivered to the customer in the bot (in their language). */

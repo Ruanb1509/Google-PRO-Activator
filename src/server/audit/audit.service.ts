@@ -54,6 +54,7 @@ export const AuditActions = {
   ORDER_REFUNDED: "order.refunded",
   DELIVERY_FAILED: "order.delivery_failed",
   DELIVERY_RESENT: "order.delivery_resent",
+  DELIVERY_VIEWED: "order.delivery_viewed",
   WEBHOOK_RECEIVED: "webhook.received",
   WEBHOOK_REJECTED: "webhook.rejected",
   PAYMENT_FAILED: "payment.failed",
@@ -66,5 +67,4 @@ export const AuditActions = {
   CUSTOMER_UPDATED: "customer.updated",
   SUPPORT_REPLIED: "support.replied",
   SUPPORT_STATUS_CHANGED: "support.status_changed",
-  SUPPORT_DELIVERY_VIEWED: "support.delivery_viewed",
 } as const;

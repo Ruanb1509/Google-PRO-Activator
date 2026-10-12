@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import { api, fmtDate, money } from "@/lib/api";
 import { userLabel } from "@/lib/types";
 import { useAction, useApi } from "@/components/use-api";
 import { useCan } from "@/components/admin-context";
 import { InventoryStatusBadge, OrderStatusBadge, PaymentStatusBadge } from "@/components/status";
 import { Badge, Button, Card, ErrorBox, Info, JsonView, LinkButton, Loading, Notice, PageHeader } from "@/components/ui";
+import { DeliveryCard, type Delivery } from "@/components/delivery-card";
 
 interface OrderDetail {
   id: string;
@@ -54,6 +56,9 @@ export default function OrderDetailPage() {
   const canStaff = useCan("STAFF");
   const isAdmin = useCan("ADMIN");
   const action = useAction();
+  // Loaded on demand: each view of the unmasked items is audited.
+  const [showDelivery, setShowDelivery] = useState(false);
+  const delivery = useApi<{ delivery: Delivery }>(showDelivery ? `/api/admin/orders/${id}/delivery` : null);
 
   async function run(kind: "sync" | "resend" | "fulfill" | "refund" | "cancel", success: string) {
     if (kind === "refund" && !confirm("Reembolsar este pedido pelo gateway de pagamento? O item entregue NÃO volta ao estoque.")) return;
@@ -89,6 +94,9 @@ export default function OrderDetailPage() {
             <Button onClick={() => run("sync", "Status consultado no provedor.")} loading={action.busy === "sync"}>
               🔄 Verificar pagamento
             </Button>
+          )}
+          {(paidLike || data.status === "REFUNDED") && (
+            <Button onClick={() => setShowDelivery((v) => !v)}>{showDelivery ? "🙈 Ocultar mensagem do cliente" : "👁️ Ver como o cliente recebeu"}</Button>
           )}
           {paidLike && missingItems <= 0 && (
             <Button onClick={() => run("resend", "Entrega reenviada.")} loading={action.busy === "resend"}>
@@ -126,6 +134,12 @@ export default function OrderDetailPage() {
           <Notice tone="warn">
             Falha na entrega ({data.deliveryAttempts} tentativa(s)): {data.deliveryError}
           </Notice>
+        </div>
+      )}
+
+      {canStaff && showDelivery && (
+        <div className="mb-4">
+          <DeliveryCard data={delivery.data?.delivery ?? null} loading={delivery.loading} error={delivery.error} onRetry={delivery.reload} orderLink={false} />
         </div>
       )}
 

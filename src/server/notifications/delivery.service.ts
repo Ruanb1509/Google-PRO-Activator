@@ -4,6 +4,7 @@ import { db } from "@/server/common/db";
 import { decrypt } from "@/server/common/crypto";
 import { logger } from "@/server/common/logger";
 import { t, escapeHtml, formatItems } from "@/i18n";
+import { Errors } from "@/server/common/errors";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { orderEvent } from "@/server/orders/order-events";
 import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
@@ -100,4 +101,49 @@ export async function retryPendingDeliveries(limit = 20): Promise<number> {
     if ((await deliverOrder(o.id)) === "delivered") delivered++;
   }
   return delivered;
+}
+
+/**
+ * What the customer actually received for an order: the clear links/codes (no masking), the delivery
+ * message rendered with the same template and language the bot used, and how it was delivered.
+ * `userId` restricts the lookup to that customer's orders. Every view is audited.
+ */
+export async function getOrderDelivery(orderId: string, viewer: { adminId: string; ip: string | null; via: "order" | "support"; ticket?: number; userId?: string }) {
+  const order = await db().order.findFirst({
+    where: { id: orderId, ...(viewer.userId ? { userId: viewer.userId } : {}) },
+    include: {
+      user: { select: { locale: true } },
+      product: { select: { name: true, nameEn: true } },
+      inventoryItems: { where: { status: "SOLD" }, orderBy: { createdAt: "asc" }, select: { valueEncrypted: true } },
+      events: { where: { type: { in: ["DELIVERED", "DELIVERY_RESENT", "DELIVERY_FAILED"] } }, orderBy: { createdAt: "asc" }, select: { type: true, actorType: true, message: true, createdAt: true } },
+    },
+  });
+  if (!order) throw Errors.notFound("Order");
+
+  const items = order.inventoryItems.map((i) => decrypt(i.valueEncrypted));
+  // Same rule as the delivery: the locale the customer has now, falling back to the order's.
+  const locale = order.user.locale ?? order.locale;
+  await audit({
+    actorType: "ADMIN",
+    adminId: viewer.adminId,
+    ip: viewer.ip,
+    action: AuditActions.DELIVERY_VIEWED,
+    resourceType: "order",
+    resourceId: order.id,
+    details: { via: viewer.via, order: order.number, items: items.length, ...(viewer.ticket ? { ticket: viewer.ticket } : {}) },
+  });
+  return {
+    orderId: order.id,
+    number: order.number,
+    productName: order.productName,
+    quantity: order.quantity,
+    status: order.status,
+    paidAt: order.paidAt,
+    deliveredAt: order.deliveredAt,
+    deliveryError: order.deliveryError,
+    locale,
+    items,
+    messageHtml: items.length >= order.quantity ? deliveryMessageHtml(order, items, locale) : null,
+    events: order.events,
+  };
 }
