@@ -1,5 +1,5 @@
 import { env } from "@/server/config/env";
-import { splitLinks } from "@/server/inventory/inventory.parser";
+import { splitBundle } from "@/server/inventory/inventory.parser";
 
 /**
  * Minimal client of the supplier's Partner API v1 (REST/JSON, USD, Bearer `sk_live_...` key).
@@ -123,11 +123,11 @@ export function usdToCents(value: string | number): number {
 /**
  * The delivered items of an order, one value per unit. Bulk orders return them in `lines`, but some
  * come as a single `delivery` holding every unit (several links, or several ready accounts), which is
- * split back per unit: a value made only of links always yields one value per link.
+ * split back per unit: several links or several same-shaped accounts always yield one value each.
  */
 export function deliveredValues(order: Pick<PartnerOrder, "delivery" | "lines" | "quantity">): string[] {
   const items = order.lines?.length ? order.lines : order.delivery ? [order.delivery] : [];
-  const values = items.flatMap((d) => splitLinks((d.link ?? d.code ?? d.content ?? "").trim())).filter(Boolean);
+  const values = items.flatMap((d) => splitBundle((d.link ?? d.code ?? d.content ?? "").trim())).filter(Boolean);
   return values.length === 1 && order.quantity > 1 ? splitUnits(values[0]!, order.quantity) : values;
 }
 

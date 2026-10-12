@@ -1,6 +1,7 @@
 import ptBR from "./pt-BR/bot.json";
 import enUS from "./en-US/bot.json";
 import type { Locale } from "@/generated/prisma/enums";
+import { isAccount } from "@/server/inventory/inventory.parser";
 
 export type MessageKey = keyof typeof ptBR;
 
@@ -31,13 +32,13 @@ export function t(locale: Locale, key: MessageKey, vars: Record<string, string |
 
 /**
  * Delivered links/codes as HTML, each tap-to-copy. Several units are labelled "Link 1:", "Link 2:"...
- * ("Código N:" for codes that are not links) with a blank line between them.
+ * ("Conta N:" for ready accounts, "Código N:" for other codes) with a blank line between them.
  */
 export function formatItems(values: string[], locale: Locale = DEFAULT_LOCALE): string {
   if (values.length === 1) return `<code>${escapeHtml(values[0]!)}</code>`;
   return values
     .map((v, i) => {
-      const label = /^https?:\/\//i.test(v) ? "Link" : locale === "pt_BR" ? "Código" : "Code";
+      const label = /^https?:\/\//i.test(v) ? "Link" : isAccount(v) ? (locale === "pt_BR" ? "Conta" : "Account") : locale === "pt_BR" ? "Código" : "Code";
       return `<b>${label} ${i + 1}:</b>\n<code>${escapeHtml(v)}</code>`;
     })
     .join("\n\n");

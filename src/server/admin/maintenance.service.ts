@@ -2,7 +2,7 @@ import { db } from "@/server/common/db";
 import { logger } from "@/server/common/logger";
 import { rateLimit, cleanupRateLimits } from "@/server/common/rate-limit";
 import { cleanupSessions } from "@/server/auth/session.service";
-import { releaseExpiredReservations, splitMultiLinkStock } from "@/server/inventory/inventory.service";
+import { releaseExpiredReservations, splitBundledStock } from "@/server/inventory/inventory.service";
 import { retryPendingDeliveries } from "@/server/notifications/delivery.service";
 import { applyPaymentStatus } from "@/server/orders/payment-lifecycle.service";
 import { findProvider } from "@/server/payments/registry";
@@ -14,7 +14,7 @@ import { syncProductEmojis } from "@/server/products/product-emoji.service";
  * Periodic housekeeping (Vercel Cron + opportunistic, throttled runs):
  *  - reconcile/expire pending orders (asks the provider before expiring => lost webhooks are recovered)
  *  - release timed-out stock reservations
- *  - split supplier stock items that hold several links into one item per link
+ *  - split supplier stock items that bundle several links/accounts into one item per unit
  *  - retry failed deliveries (supplier purchases of paid orders that ran out of stock are only retried by an admin)
  *  - notify customers waiting for products that are back in stock
  *  - mirror product logos as custom emoji (icons of the product buttons in the bot)
@@ -80,7 +80,7 @@ export async function runMaintenance() {
   }
 
   report.releasedReservations = await releaseExpiredReservations();
-  report.multiLinkItemsSplit = await splitMultiLinkStock().catch((err) => (logger.error("inventory.split_failed", { err }), 0));
+  report.bundledItemsSplit = await splitBundledStock().catch((err) => (logger.error("inventory.split_failed", { err }), 0));
   report.deliveriesRetried = await retryPendingDeliveries();
   report.restockNotified = await notifyRestocks({ limit: 100 }).catch((err) => (logger.error("stock_alert.run_failed", { err }), 0));
   report.productEmojisSynced = await syncProductEmojis().catch((err) => (logger.error("product_emoji.run_failed", { err }), 0));

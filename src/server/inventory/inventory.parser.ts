@@ -87,6 +87,32 @@ export function splitLinks(value: string): string[] {
   return links.length > 1 && ONLY_LINKS.test(value) ? links : [value];
 }
 
+const LABEL = /[^\s:]{1,30}:/g;
+const labelsOf = (s: string) => (s.match(LABEL) ?? []).join("|");
+
+/**
+ * A value bundling several units becomes one value per unit: several links, or several ready accounts
+ * whose leading label repeats ("Email: a Password: p Email: b Password: q"). Accounts are only split when
+ * every block has the same labels, so a single account with e.g. "Recovery Email:" stays whole.
+ */
+export function splitBundle(value: string): string[] {
+  const links = splitLinks(value);
+  if (links.length > 1) return links;
+  const label = value.trim().match(/^[^\s:]{1,30}:/)?.[0];
+  if (!label || /^https?:$/i.test(label)) return [value];
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = value
+    .split(new RegExp(`(?<=^|\\s)(?=${escaped})`))
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return parts.length > 1 && parts.every((p) => labelsOf(p) === labelsOf(parts[0]!)) ? parts : [value];
+}
+
+/** True for a ready-account value ("Email: ... Password: ...", "login:senha" style labels). */
+export function isAccount(value: string): boolean {
+  return /\b(e-?mail|login|user(name)?|usu[aá]rio|password|senha|pass)\s*:/i.test(value);
+}
+
 /**
  * Preview shown in listings (no audit): reveals at most 25% of the secret part and never more than 4
  * characters, so a preview can never be used or brute-forced. For links only the host is kept.
