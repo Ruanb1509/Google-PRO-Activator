@@ -2,20 +2,20 @@ import { db } from "@/server/common/db";
 import { logger } from "@/server/common/logger";
 import { rateLimit, cleanupRateLimits } from "@/server/common/rate-limit";
 import { cleanupSessions } from "@/server/auth/session.service";
-import { releaseExpiredReservations } from "@/server/inventory/inventory.service";
+import { releaseExpiredReservations, splitMultiLinkStock } from "@/server/inventory/inventory.service";
 import { retryPendingDeliveries } from "@/server/notifications/delivery.service";
 import { applyPaymentStatus } from "@/server/orders/payment-lifecycle.service";
 import { findProvider } from "@/server/payments/registry";
 import { expireDeposits } from "@/server/wallet/deposit.service";
 import { notifyRestocks } from "@/server/inventory/stock-alerts.service";
 import { syncProductEmojis } from "@/server/products/product-emoji.service";
-import { retrySupplierOrders } from "@/server/supplier/supplier.service";
 
 /**
  * Periodic housekeeping (Vercel Cron + opportunistic, throttled runs):
  *  - reconcile/expire pending orders (asks the provider before expiring => lost webhooks are recovered)
  *  - release timed-out stock reservations
- *  - retry failed deliveries and supplier purchases of paid orders that ran out of stock
+ *  - split supplier stock items that hold several links into one item per link
+ *  - retry failed deliveries (supplier purchases of paid orders that ran out of stock are only retried by an admin)
  *  - notify customers waiting for products that are back in stock
  *  - mirror product logos as custom emoji (icons of the product buttons in the bot)
  *  - expire deposits, purge old sessions/rate-limit rows
@@ -80,8 +80,8 @@ export async function runMaintenance() {
   }
 
   report.releasedReservations = await releaseExpiredReservations();
+  report.multiLinkItemsSplit = await splitMultiLinkStock().catch((err) => (logger.error("inventory.split_failed", { err }), 0));
   report.deliveriesRetried = await retryPendingDeliveries();
-  report.supplierOrdersFulfilled = await retrySupplierOrders().catch((err) => (logger.error("supplier.run_failed", { err }), 0));
   report.restockNotified = await notifyRestocks({ limit: 100 }).catch((err) => (logger.error("stock_alert.run_failed", { err }), 0));
   report.productEmojisSynced = await syncProductEmojis().catch((err) => (logger.error("product_emoji.run_failed", { err }), 0));
   report.depositsExpired = await expireDeposits();

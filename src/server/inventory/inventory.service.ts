@@ -5,7 +5,7 @@ import { db, type Tx } from "@/server/common/db";
 import { decrypt, encrypt, keyedHash } from "@/server/common/crypto";
 import { Errors } from "@/server/common/errors";
 import { audit, AuditActions } from "@/server/audit/audit.service";
-import { MAX_ITEMS_PER_BATCH, maskValue, parseInventoryText } from "@/server/inventory/inventory.parser";
+import { MAX_ITEMS_PER_BATCH, maskValue, parseInventoryText, splitLinks } from "@/server/inventory/inventory.parser";
 
 // ───────────────────────── Admin operations ─────────────────────────
 
@@ -272,4 +272,39 @@ export async function releaseExpiredReservations(): Promise<number> {
     UPDATE inventory_items SET status = 'AVAILABLE', order_id = NULL, user_id = NULL, reserved_until = NULL, reserved_at = NULL, updated_at = now()
     WHERE status = 'RESERVED' AND reserved_until < now()
       AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = inventory_items.order_id AND o.status IN ('PAID', 'DELIVERED'))`;
+}
+
+/**
+ * Repairs supplier stock stored before bulk deliveries were split: an AVAILABLE item holding several
+ * links becomes one item per link (same batch), and the original is cancelled, so a customer never
+ * gets two units under one "Link N". Idempotent; only supplier batches are scanned.
+ */
+export async function splitMultiLinkStock(): Promise<number> {
+  const candidates = await db().inventoryItem.findMany({
+    where: { status: "AVAILABLE", batchId: { startsWith: "supplier:" } },
+    select: { id: true, productId: true, batchId: true, valueEncrypted: true },
+  });
+  let split = 0;
+  for (const item of candidates) {
+    const links = splitLinks(decrypt(item.valueEncrypted));
+    if (links.length < 2) continue;
+    await db().$transaction(async (tx) => {
+      // Skip if it was reserved meanwhile.
+      const claimed = await tx.inventoryItem.updateMany({ where: { id: item.id, status: "AVAILABLE" }, data: { status: "CANCELLED" } });
+      if (!claimed.count) return;
+      await tx.inventoryItem.createMany({
+        data: links.map((v) => ({ productId: item.productId, valueEncrypted: encrypt(v), valueHash: keyedHash(v), valuePreview: maskValue(v), batchId: item.batchId })),
+        skipDuplicates: true,
+      });
+      const created = await tx.inventoryItem.findMany({ where: { batchId: item.batchId, events: { none: {} } }, select: { id: true } });
+      await tx.inventoryItemEvent.createMany({
+        data: [
+          { itemId: item.id, type: "CANCELLED", actorType: "SYSTEM" as ActorType, details: { reason: "split_multi_link", units: links.length } },
+          ...created.map((c) => ({ itemId: c.id, type: "ADDED", actorType: "SYSTEM" as ActorType, details: { batchId: item.batchId, source: "split_multi_link", from: item.id } })),
+        ],
+      });
+      split++;
+    });
+  }
+  return split;
 }

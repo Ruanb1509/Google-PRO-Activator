@@ -1,4 +1,5 @@
 import { env } from "@/server/config/env";
+import { splitLinks } from "@/server/inventory/inventory.parser";
 
 /**
  * Minimal client of the supplier's Partner API v1 (REST/JSON, USD, Bearer `sk_live_...` key).
@@ -119,8 +120,28 @@ export function usdToCents(value: string | number): number {
   return Math.round(Number(value) * 100);
 }
 
-/** The delivered items of an order, one value per unit (bulk orders return them in `lines`). */
-export function deliveredValues(order: Pick<PartnerOrder, "delivery" | "lines">): string[] {
+/**
+ * The delivered items of an order, one value per unit. Bulk orders return them in `lines`, but some
+ * come as a single `delivery` holding every unit (several links, or several ready accounts), which is
+ * split back per unit: a value made only of links always yields one value per link.
+ */
+export function deliveredValues(order: Pick<PartnerOrder, "delivery" | "lines" | "quantity">): string[] {
   const items = order.lines?.length ? order.lines : order.delivery ? [order.delivery] : [];
-  return items.map((d) => (d.link ?? d.code ?? d.content ?? "").trim()).filter(Boolean);
+  const values = items.flatMap((d) => splitLinks((d.link ?? d.code ?? d.content ?? "").trim())).filter(Boolean);
+  return values.length === 1 && order.quantity > 1 ? splitUnits(values[0]!, order.quantity) : values;
+}
+
+/** Splits a value holding `quantity` units (blank-line blocks, a repeated leading label like "Email:", or lines); unchanged if no split matches. */
+function splitUnits(value: string, quantity: number): string[] {
+  const label = value.match(/^[^\s:]{1,30}:/)?.[0];
+  const candidates = [
+    value.split(/\n\s*\n/),
+    label ? value.split(new RegExp(`(?=${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`)) : [],
+    value.split("\n"),
+  ];
+  for (const parts of candidates) {
+    const units = parts.map((p) => p.trim()).filter(Boolean);
+    if (units.length === quantity) return units;
+  }
+  return [value];
 }

@@ -5,7 +5,6 @@ import { AppError, Errors } from "@/server/common/errors";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { encrypt, keyedHash } from "@/server/common/crypto";
 import { logger } from "@/server/common/logger";
-import { rateLimit } from "@/server/common/rate-limit";
 import { escapeHtml } from "@/i18n";
 import { formatMoney } from "@/server/common/money";
 import { maskValue } from "@/server/inventory/inventory.parser";
@@ -193,36 +192,7 @@ export async function alertSupplierFailure(order: AlertOrder, outcome: Extract<S
       `🧾 Pedido <b>#${order.number}</b> · pago ${formatMoney(order.amountCents, order.currency)}`,
       "",
       `O cliente pagou mas <b>não recebeu</b> o produto — ${escapeHtml(reason)}.`,
-      "Assim que resolver, a entrega é automática (nova tentativa a cada 10 min por 24 h). Ou reembolse pelo painel.",
+      "Assim que resolver, abra o pedido no painel e use “Atribuir estoque e entregar”, ou reembolse.",
     ].join("\n"),
   );
-}
-
-/**
- * Maintenance: retries the supplier for paid orders still missing items (supplier restocked, wallet
- * topped up, timeout...). Each order is retried at most every 10 minutes, for 24 hours after payment.
- */
-export async function retrySupplierOrders(limit = 10): Promise<number> {
-  if (!partnerConfigured()) return 0;
-  const orders = await db().order.findMany({
-    where: { status: "PAID", paidAt: { gt: new Date(Date.now() - 24 * 3600 * 1000) }, product: { supplierSlug: { not: null } } },
-    orderBy: { paidAt: "asc" },
-    take: 50,
-    select: { id: true, number: true, productName: true, quantity: true, _count: { select: { inventoryItems: { where: { status: "SOLD" } } } } },
-  });
-  let fulfilled = 0;
-  for (const o of orders) {
-    if (fulfilled >= limit) break;
-    if (o._count.inventoryItems >= o.quantity) continue;
-    if (!(await rateLimit(`supplier:retry:${o.id}`, 1, 600))) continue;
-    try {
-      if ((await fulfillFromSupplier(o.id)).kind === "fulfilled") {
-        fulfilled++;
-        await alertAdmins(`✅ Pedido <b>#${o.number}</b> (${escapeHtml(o.productName)}) comprado no fornecedor e entregue ao cliente.`);
-      }
-    } catch (err) {
-      logger.error("supplier.retry_failed", { err, orderId: o.id });
-    }
-  }
-  return fulfilled;
 }

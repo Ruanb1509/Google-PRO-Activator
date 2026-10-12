@@ -78,7 +78,15 @@ export function parseInventoryText(text: string, opts: { csv?: boolean } = {}): 
   return out;
 }
 
-/** Masks a value for listings: keeps a short prefix/suffix only. */
+const LINK = /https?:\/\/\S+/gi;
+const ONLY_LINKS = /^\s*(?:https?:\/\/\S+\s*)+$/i;
+
+/** A value made only of several links (one per unit, e.g. a bulk supplier delivery) becomes one value per link. */
+export function splitLinks(value: string): string[] {
+  const links = value.match(LINK) ?? [];
+  return links.length > 1 && ONLY_LINKS.test(value) ? links : [value];
+}
+
 /**
  * Preview shown in listings (no audit): reveals at most 25% of the secret part and never more than 4
  * characters, so a preview can never be used or brute-forced. For links only the host is kept.
