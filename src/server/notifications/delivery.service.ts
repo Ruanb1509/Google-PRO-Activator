@@ -1,3 +1,5 @@
+import type { Product } from "@/generated/prisma/client";
+import type { Locale } from "@/generated/prisma/enums";
 import { db } from "@/server/common/db";
 import { decrypt } from "@/server/common/crypto";
 import { logger } from "@/server/common/logger";
@@ -8,6 +10,20 @@ import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
 import { localizedName } from "@/server/products/products.service";
 
 const MAX_ATTEMPTS = 8;
+
+/** The exact Telegram HTML the customer gets when an order is delivered (also previewed in support). */
+export function deliveryMessageHtml(
+  order: { number: number; quantity: number; product: Pick<Product, "name" | "nameEn"> },
+  values: string[],
+  locale: Locale,
+): string {
+  return t(
+    locale,
+    "payment_confirmed",
+    { product: localizedName(order.product, locale), quantity: order.quantity, number: order.number },
+    { items: formatItems(values, locale) },
+  );
+}
 
 export type DeliveryOutcome = "delivered" | "skipped" | "failed";
 
@@ -41,12 +57,7 @@ export async function deliverOrder(orderId: string, opts: { resend?: boolean; ad
 
   const locale = order.user.locale ?? order.locale;
   try {
-    const html = t(
-      locale,
-      "payment_confirmed",
-      { product: localizedName(order.product, locale), quantity: order.quantity, number: order.number },
-      { items: formatItems(items.map((i) => decrypt(i.valueEncrypted)), locale) },
-    );
+    const html = deliveryMessageHtml(order, items.map((i) => decrypt(i.valueEncrypted)), locale);
     await sendHtml(order.user.telegramId, html);
     await db().order.updateMany({
       where: { id: orderId, status: { in: ["PAID", "DELIVERED"] } },

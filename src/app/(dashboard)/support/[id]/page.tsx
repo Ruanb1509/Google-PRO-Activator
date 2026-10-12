@@ -43,6 +43,28 @@ interface TicketDetail {
   recentOrders: OrderSummary[];
 }
 
+interface Delivery {
+  orderId: string;
+  number: number;
+  productName: string;
+  quantity: number;
+  status: string;
+  paidAt: string | null;
+  deliveredAt: string | null;
+  deliveryError: string | null;
+  locale: "pt_BR" | "en_US";
+  items: string[];
+  messageHtml: string | null;
+  events: { type: string; actorType: string; message: string | null; createdAt: string }[];
+}
+
+function deliveryEventLabel(e: Delivery["events"][number]): string {
+  if (e.type === "DELIVERY_FAILED") return `Falha ao enviar a mensagem${e.message ? `: ${e.message}` : ""}`;
+  if (e.type === "DELIVERY_RESENT") return "Mensagem de entrega reenviada pela equipe";
+  if (e.actorType === "BOT") return "Acesso exibido ao cliente em 📦 Meus pedidos";
+  return "Mensagem de entrega enviada pelo bot no Telegram";
+}
+
 const QUICK_REPLIES = [
   "Olá! Obrigado pelo contato. Vou verificar e já te retorno.",
   "Seu pagamento ainda não foi confirmado pelo provedor. Assim que confirmar, a entrega é automática.",
@@ -58,6 +80,9 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
   const [text, setText] = useState("");
   const [zoom, setZoom] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const [pickedOrder, setPickedOrder] = useState<string | null>(null);
+  const deliveryOrderId = pickedOrder ?? data?.order?.id ?? null;
+  const delivery = useApi<{ delivery: Delivery | null }>(canReply && deliveryOrderId ? `/api/admin/support/${id}/delivery?orderId=${encodeURIComponent(deliveryOrderId)}` : null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
@@ -123,6 +148,7 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
       {action.message && <div className="mb-3"><Notice>{action.message}</Notice></div>}
 
       <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+        <div className="min-w-0 space-y-4">
         <Card title="Conversa">
           <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
             {data.messages.map((m) => {
@@ -178,6 +204,11 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
           )}
         </Card>
 
+        {canReply && deliveryOrderId && (
+          <DeliveryCard data={delivery.data?.delivery ?? null} loading={delivery.loading} error={delivery.error} onRetry={delivery.reload} isTicketOrder={deliveryOrderId === data.order?.id} />
+        )}
+        </div>
+
         <div className="space-y-4">
           <Card title="Cliente">
             <div className="space-y-2 text-sm">
@@ -210,7 +241,18 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
                     <Link href={`/orders/${o.id}`} className="truncate hover:underline">
                       #{o.number} · {o.productName}
                     </Link>
-                    <OrderStatusBadge status={o.status} />
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {canReply && ["PAID", "DELIVERED", "REFUNDED"].includes(o.status) && (
+                        <button
+                          type="button"
+                          onClick={() => setPickedOrder(o.id)}
+                          className={cn("rounded-full border px-2 py-0.5 text-[11px]", o.id === deliveryOrderId ? "border-accent text-fg" : "border-line text-muted hover:border-accent hover:text-fg")}
+                        >
+                          Ver entrega
+                        </button>
+                      )}
+                      <OrderStatusBadge status={o.status} />
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -228,5 +270,103 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
         </button>
       )}
     </>
+  );
+}
+
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      size="sm"
+      onClick={() => {
+        void navigator.clipboard.writeText(value).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      {copied ? "Copiado" : "Copiar"}
+    </Button>
+  );
+}
+
+/** What the customer received, unmasked: the links/codes and the bot message exactly as it was sent. */
+function DeliveryCard({ data, loading, error, onRetry, isTicketOrder }: { data: Delivery | null; loading: boolean; error: string | null; onRetry: () => void; isTicketOrder: boolean }) {
+  return (
+    <Card
+      title={data ? `O que o cliente recebeu · pedido #${data.number}${isTicketOrder ? "" : " (outro pedido)"}` : "O que o cliente recebeu"}
+      actions={
+        data && (
+          <Link href={`/orders/${data.orderId}`} className="text-sm text-accent hover:underline">
+            Abrir pedido →
+          </Link>
+        )
+      }
+    >
+      {loading && !data ? (
+        <Loading />
+      ) : error ? (
+        <ErrorBox error={error} onRetry={onRetry} />
+      ) : !data ? null : (
+        <div className="space-y-4 text-sm">
+          <div className="grid gap-2 sm:grid-cols-4">
+            <Info label="Produto" value={`${data.productName} (x${data.quantity})`} />
+            <Info label="Status" value={<OrderStatusBadge status={data.status} />} />
+            <Info label="Pago em" value={data.paidAt ? fmtDate(data.paidAt) : "—"} />
+            <Info label="Entregue em" value={data.deliveredAt ? fmtDate(data.deliveredAt) : "—"} />
+          </div>
+
+          <div>
+            <p className="mb-1.5 text-xs text-muted">{data.items.length > 1 ? `Itens entregues (${data.items.length}/${data.quantity})` : "Item entregue"}</p>
+            {data.items.length ? (
+              <ul className="space-y-1.5">
+                {data.items.map((v, i) => (
+                  <li key={i} className="flex items-center gap-2 rounded-lg border border-line bg-card-2 px-3 py-2">
+                    {data.items.length > 1 && <span className="shrink-0 text-xs text-muted">{i + 1}.</span>}
+                    {/^https?:\/\//i.test(v) ? (
+                      <a href={v} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 break-all font-mono text-xs text-accent hover:underline">
+                        {v}
+                      </a>
+                    ) : (
+                      <span className="min-w-0 flex-1 break-all font-mono text-xs">{v}</span>
+                    )}
+                    <CopyButton value={v} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-muted">Nenhum item foi atribuído a este pedido ainda.</p>
+            )}
+          </div>
+
+          {data.messageHtml && (
+            <div>
+              <p className="mb-1.5 text-xs text-muted">Mensagem que o cliente recebeu no Telegram ({data.locale === "pt_BR" ? "Português" : "English"})</p>
+              <div
+                className="max-w-md whitespace-pre-wrap break-words rounded-2xl rounded-tl-sm border border-line bg-card-2 px-3.5 py-2.5 [&_code]:rounded [&_code]:bg-card [&_code]:px-1 [&_code]:font-mono [&_code]:text-xs"
+                // Built server-side from our own template; every interpolated value is HTML-escaped.
+                dangerouslySetInnerHTML={{ __html: data.messageHtml }}
+              />
+            </div>
+          )}
+
+          <div>
+            <p className="mb-1.5 text-xs text-muted">Como foi entregue</p>
+            {data.events.length ? (
+              <ul className="space-y-1">
+                {data.events.map((e, i) => (
+                  <li key={i} className={cn("flex gap-2", e.type === "DELIVERY_FAILED" && "text-bad")}>
+                    <span className="shrink-0 text-muted">{fmtDate(e.createdAt)}</span>
+                    <span>{deliveryEventLabel(e)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-muted">{data.deliveryError ? `Ainda não entregue: ${data.deliveryError}` : "Ainda não houve entrega."}</p>
+            )}
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
