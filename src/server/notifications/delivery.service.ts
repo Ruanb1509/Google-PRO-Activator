@@ -7,6 +7,7 @@ import { t, escapeHtml, formatItems } from "@/i18n";
 import { Errors } from "@/server/common/errors";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { orderEvent } from "@/server/orders/order-events";
+import { downloadKeyboard, FILE_EXPORT_MIN_QTY } from "@/server/notifications/delivery-file";
 import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
 import { localizedName } from "@/server/products/products.service";
 
@@ -59,7 +60,7 @@ export async function deliverOrder(orderId: string, opts: { resend?: boolean; ad
   const locale = order.user.locale ?? order.locale;
   try {
     const html = deliveryMessageHtml(order, items.map((i) => decrypt(i.valueEncrypted)), locale);
-    await sendHtml(order.user.telegramId, html);
+    await sendHtml(order.user.telegramId, html, items.length >= FILE_EXPORT_MIN_QTY ? downloadKeyboard(order.id, locale) : undefined);
     await db().order.updateMany({
       where: { id: orderId, status: { in: ["PAID", "DELIVERED"] } },
       data: { status: "DELIVERED", deliveredAt: order.deliveredAt ?? new Date(), deliveryError: null, deliveryLockedUntil: null },

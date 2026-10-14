@@ -123,5 +123,8 @@
   "buy_now_button": "🛒 Buy",
   "select_quantity": "<b>Select Quantity</b>\n\n{icon} {name}\n{price} / unit\n🟢 {stock} in stock",
   "back_to_product": "◀️ Back to Product",
-  "cancel_button": "❌ Cancel"
+  "cancel_button": "❌ Cancel",
+  "download_txt": "📄 Download TXT",
+  "download_csv": "📊 Download CSV",
+  "download_caption": "📦 Order #{number}: {count} items"
 }

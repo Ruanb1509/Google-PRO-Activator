@@ -34,14 +34,16 @@ export function t(locale: Locale, key: MessageKey, vars: Record<string, string |
  * Delivered links/codes as HTML, each tap-to-copy. Several units are labelled "Link 1:", "Link 2:"...
  * ("Conta N:" for ready accounts, "Código N:" for other codes) with a blank line between them.
  */
+/** "Link", "Conta"/"Account" or "Código"/"Code", depending on what the delivered value is. */
+export function itemLabel(value: string, locale: Locale = DEFAULT_LOCALE): string {
+  if (/^https?:\/\//i.test(value)) return "Link";
+  if (isAccount(value)) return locale === "pt_BR" ? "Conta" : "Account";
+  return locale === "pt_BR" ? "Código" : "Code";
+}
+
 export function formatItems(values: string[], locale: Locale = DEFAULT_LOCALE): string {
   if (values.length === 1) return `<code>${escapeHtml(values[0]!)}</code>`;
-  return values
-    .map((v, i) => {
-      const label = /^https?:\/\//i.test(v) ? "Link" : isAccount(v) ? (locale === "pt_BR" ? "Conta" : "Account") : locale === "pt_BR" ? "Código" : "Code";
-      return `<b>${label} ${i + 1}:</b>\n<code>${escapeHtml(v)}</code>`;
-    })
-    .join("\n\n");
+  return values.map((v, i) => `<b>${itemLabel(v, locale)} ${i + 1}:</b>\n<code>${escapeHtml(v)}</code>`).join("\n\n");
 }
 
 /** Maps Telegram's `language_code` (e.g. "pt", "pt-br", "en") to a supported locale. */

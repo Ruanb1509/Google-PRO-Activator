@@ -19,6 +19,7 @@ import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, De
 import { getOpenTicket } from "@/server/support/support.service";
 import { hasStockAlert, toggleStockAlert } from "@/server/inventory/stock-alerts.service";
 import { supplierIcons } from "@/server/supplier/supplier-stock";
+import { deliveryFile, downloadKeyboard, FILE_EXPORT_MIN_QTY, type ExportFormat } from "@/server/notifications/delivery-file";
 import { handleSupportMessage, registerSupportHandlers, showSupport, type SupportState } from "@/server/bot/support.handlers";
 
 /** Context enriched with the stored customer. The bot is only an interface: logic lives in services. */
@@ -385,13 +386,24 @@ async function showOrder(ctx: StoreContext, orderId: string) {
     date: order.createdAt.toLocaleString(ctx.locale === "pt_BR" ? "pt-BR" : "en-US", { timeZone: "America/Sao_Paulo" }),
   });
   if (items.length) text += t(ctx.locale, "order_access", {}, { items: formatItems(items, ctx.locale) });
-  const kb = new InlineKeyboard();
+  const kb = items.length >= FILE_EXPORT_MIN_QTY ? downloadKeyboard(order.id, ctx.locale).row() : new InlineKeyboard();
   if (order.status === "PENDING") {
     if (order.payment?.checkoutUrl && !order.payment.pixCopyPaste) kb.url(ctx.tr("pay_button"), order.payment.checkoutUrl).row();
     if (order.payment?.pixCopyPaste) addCopyPixButton(ctx, kb, order.payment.pixCopyPaste);
     kb.text(ctx.tr("check_status"), `st:${order.id}`).row().text(ctx.tr("cancel_order"), `cx:${order.id}`);
   }
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
+}
+
+/** Sends the order's items as a TXT or CSV file (orders with FILE_EXPORT_MIN_QTY+ units). */
+async function sendDeliveryFile(ctx: StoreContext, orderId: string, format: ExportFormat) {
+  const found = await getUserOrder(ctx.user.id, orderId);
+  if (!found || found.items.length < FILE_EXPORT_MIN_QTY) return;
+  if (!(await rateLimit(`bot:download:${ctx.user.id}`, 10, 60))) return ctx.reply(ctx.tr("too_many_requests"));
+  const file = deliveryFile(found.items, format, found.order.number, ctx.locale);
+  await ctx.replyWithDocument(new InputFile(file.content, file.filename), {
+    caption: ctx.tr("download_caption", { number: found.order.number, count: found.items.length }),
+  });
 }
 
 async function checkStatus(ctx: StoreContext, orderId: string) {
@@ -636,6 +648,10 @@ export function createBot(): Bot<StoreContext> {
     const r = await cancelOrderByUser(ctx.user.id, ctx.match[1]!);
     if (r) await ctx.reply(ctx.tr("order_cancelled", { number: r.number }));
     else await showOrder(ctx, ctx.match[1]!);
+  });
+  bot.callbackQuery(/^dl:(\w+):(txt|csv)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await sendDeliveryFile(ctx, ctx.match[1]!, ctx.match[2] as ExportFormat);
   });
   bot.callbackQuery(/^o:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
