@@ -8,6 +8,7 @@ import { logger } from "@/server/common/logger";
 import { formatMoney, parseMoneyToCents } from "@/server/common/money";
 import { rateLimit } from "@/server/common/rate-limit";
 import { allTranslations, detectLocale, escapeHtml, formatItems, t, type MessageKey } from "@/i18n";
+import { serviceEmoji } from "@/lib/service-emoji";
 import { bulkDiscountTiers, bulkPercentOff, discountedUnitCents, productUnitCents } from "@/lib/bulk-discounts";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
 import { listProducts, sellableStock, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
@@ -106,9 +107,12 @@ async function showProducts(ctx: StoreContext) {
   // Sold-out products stay listed (at the end, in red) so customers can ask to be notified when they are back.
   const products = (await listProducts()).sort((a, b) => Number(b.sellable > 0) - Number(a.sellable > 0));
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
-  // Service grid: just the name, with the service logo on the left; sold-out ones in red.
-  const buttons = products.map((p) => ({ p, label: localizedName(p, ctx.locale) }));
+  // Service grid: just the name, with the service logo on the left (a plain emoji when logos are refused); sold-out ones in red.
   const keyboard = (look: ButtonLook) => {
+    const buttons = products.map((p) => {
+      const name = localizedName(p, ctx.locale);
+      return { p, label: look === "icons" && p.buttonEmojiId ? name : `${serviceEmoji(p.name)} ${name}` };
+    });
     const kb = new InlineKeyboard();
     for (const row of gridRows(buttons)) {
       for (const { p, label } of row) {
@@ -194,7 +198,8 @@ async function showQuantity(ctx: StoreContext, productId: string) {
   const [price, discounts, icons] = await Promise.all([priceFormatter(ctx.locale), bulkDiscountsText(ctx, product), supplierIcons([product])]);
   const emojiId = product.logoEmojiId ?? icons.get(product.id);
   const text = (withIcon: boolean) => {
-    const icon = withIcon && emojiId ? `<tg-emoji emoji-id="${escapeHtml(emojiId)}">🔹</tg-emoji>` : "🔹";
+    const fallback = serviceEmoji(product.name);
+    const icon = withIcon && emojiId ? `<tg-emoji emoji-id="${escapeHtml(emojiId)}">${fallback}</tg-emoji>` : fallback;
     const head = t(ctx.locale, "select_quantity", { name: localizedName(product, ctx.locale), price: price(product), stock }, { icon });
     return `${head}${discounts ? `\n\n${discounts}` : ""}\n\n${ctx.tr("choose_quantity")}`;
   };
