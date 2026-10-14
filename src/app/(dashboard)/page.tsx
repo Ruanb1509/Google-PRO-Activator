@@ -36,6 +36,64 @@ const tooltipStyle = {
 
 const shortDay = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 
+interface ProfitTotals {
+  orders: number;
+  revenueBrlCents: number;
+  profitBrlCents: number;
+}
+interface Profit {
+  today: ProfitTotals;
+  currentMonth: ProfitTotals;
+  total: ProfitTotals;
+  days: (ProfitTotals & { day: string })[];
+}
+
+const margin = (t: ProfitTotals) => (t.revenueBrlCents > 0 ? `${Math.round((t.profitBrlCents / t.revenueBrlCents) * 100)}%` : "—");
+const profitTone = (c: number) => (c > 0 ? "ok" : c < 0 ? "bad" : undefined);
+
+function ProfitSection() {
+  const { data } = useApi<Profit>("/api/admin/profit");
+  if (!data) return null;
+  const byDay = new Map(data.days.map((d) => [d.day, d.profitBrlCents]));
+  const brtToday = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  const chart = Array.from({ length: 30 }, (_, i) => {
+    const day = new Date(brtToday.getTime() - (29 - i) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return { day, profit: (byDay.get(day) ?? 0) / 100 };
+  });
+  return (
+    <>
+      <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3">
+        <Link href="/profit" className="block">
+          <Stat label="Lucro hoje" value={fmtBRL(data.today.profitBrlCents)} tone={profitTone(data.today.profitBrlCents)} hint={`Margem ${margin(data.today)}`} />
+        </Link>
+        <Link href="/profit" className="block">
+          <Stat label="Lucro do mês" value={fmtBRL(data.currentMonth.profitBrlCents)} tone={profitTone(data.currentMonth.profitBrlCents)} hint={`Margem ${margin(data.currentMonth)} · receita ${fmtBRL(data.currentMonth.revenueBrlCents)}`} />
+        </Link>
+        <Link href="/profit" className="block">
+          <Stat label="Lucro total" value={fmtBRL(data.total.profitBrlCents)} tone={profitTone(data.total.profitBrlCents)} hint={`Margem ${margin(data.total)} · ${data.total.orders} pedidos`} />
+        </Link>
+      </div>
+      <Card title="Lucro por dia (30 dias)" className="mt-4" actions={<Link href="/profit" className="text-xs text-accent hover:underline">Ver detalhes →</Link>}>
+        <div className="h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chart} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+              <CartesianGrid {...grid} />
+              <XAxis dataKey="day" tickFormatter={shortDay} {...axis} minTickGap={16} />
+              <YAxis {...axis} width={48} />
+              <Tooltip {...tooltipStyle} labelFormatter={(d) => fmtDay(String(d))} formatter={(v) => [fmtBRL(Math.round(Number(v) * 100)), "Lucro"]} />
+              <Bar dataKey="profit" radius={[4, 4, 0, 0]} maxBarSize={18}>
+                {chart.map((d) => (
+                  <Cell key={d.day} fill={d.profit < 0 ? "var(--color-bad)" : "var(--color-ok)"} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+    </>
+  );
+}
+
 export default function OverviewPage() {
   const { data, error, loading, reload } = useApi<Stats>("/api/admin/stats");
 
@@ -89,6 +147,8 @@ export default function OverviewPage() {
           <Stat label="Tickets aguardando resposta" value={data.openTickets} tone={data.openTickets > 0 ? "warn" : "ok"} hint="Suporte pré e pós-compra" />
         </Link>
       </div>
+
+      <ProfitSection />
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <Card title="Vendas por dia (30 dias)">
