@@ -145,9 +145,10 @@ model Product {
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  inventoryItems InventoryItem[]
-  orders         Order[]
-  stockAlerts    StockAlert[]
+  inventoryItems    InventoryItem[]
+  orders            Order[]
+  stockAlerts       StockAlert[]
+  supplierPurchases SupplierPurchase[]
 
   @@index([isActive, deletedAt])
   @@map("products")
@@ -195,6 +196,25 @@ model InventoryItemEvent {
 
   @@index([itemId, createdAt])
   @@map("inventory_item_events")
+}
+
+/// One Partner API purchase (a stock batch `supplier:<code>`) and what it cost, for profit reports.
+model SupplierPurchase {
+  id                String   @id @default(cuid())
+  batchId           String   @unique @map("batch_id") /// inventory_items.batch_id of the delivered units
+  supplierOrderCode String   @map("supplier_order_code")
+  productId         String   @map("product_id")
+  orderId           String?  @map("order_id") /// customer order it was bought for (null = bought to stock)
+  units             Int /// units delivered by the supplier
+  totalCostUsdCents Int      @map("total_cost_usd_cents") /// charged to the supplier wallet
+  usdBrlRate        Float?   @map("usd_brl_rate") /// USD-BRL rate on the purchase day (null = not fetched yet)
+  totalCostBrlCents Int?     @map("total_cost_brl_cents")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([createdAt])
+  @@map("supplier_purchases")
 }
 
 // ───────────────────────────── Orders & payments ─────────────────────────────

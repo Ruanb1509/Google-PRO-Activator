@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Prisma } from "@/generated/prisma/client";
 import type { ActorType } from "@/generated/prisma/enums";
 import { db } from "@/server/common/db";
 import { AppError, Errors } from "@/server/common/errors";
@@ -6,6 +7,7 @@ import { audit, AuditActions } from "@/server/audit/audit.service";
 import { encrypt, keyedHash } from "@/server/common/crypto";
 import { logger } from "@/server/common/logger";
 import { escapeHtml } from "@/i18n";
+import { usdBrlRate, usdToBrlCents } from "@/server/common/fx";
 import { formatMoney } from "@/server/common/money";
 import { maskValue } from "@/server/inventory/inventory.parser";
 import { orderEvent } from "@/server/orders/order-events";
@@ -25,6 +27,28 @@ const ALERTS: Record<string, string> = {
   COST_ABOVE_LIMIT: "o preço do fornecedor passou do custo máximo do produto",
   PRODUCT_NOT_FOUND: "produto não encontrado no fornecedor (verifique o slug)",
 };
+
+type PurchaseRecord = { batchId: string; orderCode: string; productId: string; orderId?: string; units: number; totalCharged: string };
+
+/** Stores what a supplier purchase cost (USD, plus BRL at today's rate) for the profit report. Idempotent per batch. */
+async function recordPurchase(tx: Prisma.TransactionClient, p: PurchaseRecord, rate: number | null) {
+  const usd = usdToCents(p.totalCharged);
+  await tx.supplierPurchase.createMany({
+    data: [
+      {
+        batchId: p.batchId,
+        supplierOrderCode: p.orderCode,
+        productId: p.productId,
+        orderId: p.orderId ?? null,
+        units: p.units,
+        totalCostUsdCents: usd,
+        usdBrlRate: rate,
+        totalCostBrlCents: rate ? usdToBrlCents(usd, rate) : null,
+      },
+    ],
+    skipDuplicates: true,
+  });
+}
 
 /**
  * Buys the units a PAID order is still missing (local stock ran out) from the Partner API, binds the
@@ -64,6 +88,7 @@ export async function fulfillFromSupplier(orderId: string): Promise<SupplierOutc
 
   const values = deliveredValues(partnerOrder);
   const batchId = `supplier:${partnerOrder.orderCode}`;
+  const rate = await usdBrlRate();
   const bound = await db().$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`;
     const current = await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { status: true } });
@@ -89,6 +114,7 @@ export async function fulfillFromSupplier(orderId: string): Promise<SupplierOutc
         ...(c.status === "SOLD" ? [{ itemId: c.id, type: "SOLD", orderId, actorType: "SYSTEM" as ActorType }] : []),
       ]),
     });
+    await recordPurchase(tx, { batchId, orderCode: partnerOrder.orderCode, productId: order.productId, orderId, units: values.length, totalCharged: partnerOrder.totalCharged }, rate);
     await orderEvent(
       {
         orderId,
@@ -138,7 +164,9 @@ export async function purchaseToStock(productId: string, quantity: number, actor
 
   const values = deliveredValues(partnerOrder);
   const batchId = `supplier:${partnerOrder.orderCode}`;
+  const rate = await usdBrlRate();
   const added = await db().$transaction(async (tx) => {
+    await recordPurchase(tx, { batchId, orderCode: partnerOrder.orderCode, productId, units: values.length, totalCharged: partnerOrder.totalCharged }, rate);
     const res = await tx.inventoryItem.createMany({
       data: values.map((v) => ({ productId, valueEncrypted: encrypt(v), valueHash: keyedHash(v), valuePreview: maskValue(v), batchId })),
       skipDuplicates: true,
