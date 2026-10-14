@@ -7,7 +7,7 @@ import { AppError } from "@/server/common/errors";
 import { logger } from "@/server/common/logger";
 import { formatMoney, parseMoneyToCents } from "@/server/common/money";
 import { rateLimit } from "@/server/common/rate-limit";
-import { allTranslations, detectLocale, formatItems, t, type MessageKey } from "@/i18n";
+import { allTranslations, detectLocale, escapeHtml, formatItems, t, type MessageKey } from "@/i18n";
 import { bulkDiscountTiers, bulkPercentOff, discountedUnitCents, productUnitCents } from "@/lib/bulk-discounts";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
 import { listProducts, sellableStock, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
@@ -17,6 +17,7 @@ import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, DepositError, type DepositErrorCode } from "@/server/wallet/deposit.service";
 import { getOpenTicket } from "@/server/support/support.service";
 import { hasStockAlert, toggleStockAlert } from "@/server/inventory/stock-alerts.service";
+import { supplierIcons } from "@/server/supplier/supplier-stock";
 import { handleSupportMessage, registerSupportHandlers, showSupport, type SupportState } from "@/server/bot/support.handlers";
 
 /** Context enriched with the stored customer. The bot is only an interface: logic lives in services. */
@@ -105,9 +106,8 @@ async function showProducts(ctx: StoreContext) {
   // Sold-out products stay listed (at the end, in red) so customers can ask to be notified when they are back.
   const products = (await listProducts()).sort((a, b) => Number(b.sellable > 0) - Number(a.sellable > 0));
   if (!products.length) return ctx.reply(ctx.tr("no_products"));
-  const price = await priceFormatter(ctx.locale);
-  // Grid of "Name · price" buttons with the service logo on the left; sold-out ones in red.
-  const buttons = products.map((p) => ({ p, label: `${localizedName(p, ctx.locale)} · ${price(p)}` }));
+  // Service grid: just the name, with the service logo on the left; sold-out ones in red.
+  const buttons = products.map((p) => ({ p, label: localizedName(p, ctx.locale) }));
   const keyboard = (look: ButtonLook) => {
     const kb = new InlineKeyboard();
     for (const row of gridRows(buttons)) {
@@ -149,9 +149,9 @@ async function showProduct(ctx: StoreContext, productId: string) {
   }
 
   if (!(await availablePaymentMethods(ctx.locale)).length) return ctx.reply(`${text}\n\n${ctx.tr("no_payment_methods")}`, { parse_mode: "HTML" });
-  const kb = quantityKeyboard(ctx, product.id, stock);
+  const kb = new InlineKeyboard().text(ctx.tr("buy_now_button"), `buy:${product.id}`).style("success").row().text(ctx.tr("back"), "menu:buy");
   const discounts = await bulkDiscountsText(ctx, product);
-  const body = `${text}${discounts ? `\n\n${discounts}` : ""}\n\n${ctx.tr("choose_quantity")}`;
+  const body = `${text}${discounts ? `\n\n${discounts}` : ""}`;
   const logo = productLogoUrl(product, true);
   if (logo) {
     try {
@@ -182,9 +182,39 @@ async function bulkDiscountsText(ctx: StoreContext, product: { priceBrlCents: nu
   return [ctx.tr("bulk_discounts_title"), ...lines].join("\n");
 }
 
+/** Whether Telegram accepts the service logo (custom emoji) inside message text. Per instance. */
+let textIcons = true;
+
+/** "Select quantity" screen: service, unit price, stock, discount tiers and the quantity buttons. */
+async function showQuantity(ctx: StoreContext, productId: string) {
+  const product = await db().product.findFirst({ where: { id: productId, isActive: true, deletedAt: null } });
+  if (!product) return ctx.reply(ctx.tr("no_products"));
+  const stock = await sellableStock(product);
+  if (stock <= 0) return ctx.reply(ctx.tr("out_of_stock"), { parse_mode: "HTML", reply_markup: stockAlertKeyboard(ctx, product.id, await hasStockAlert(ctx.user.id, product.id)) });
+  const [price, discounts, icons] = await Promise.all([priceFormatter(ctx.locale), bulkDiscountsText(ctx, product), supplierIcons([product])]);
+  const emojiId = product.logoEmojiId ?? icons.get(product.id);
+  const text = (withIcon: boolean) => {
+    const icon = withIcon && emojiId ? `<tg-emoji emoji-id="${escapeHtml(emojiId)}">🔹</tg-emoji>` : "🔹";
+    const head = t(ctx.locale, "select_quantity", { name: localizedName(product, ctx.locale), price: price(product), stock }, { icon });
+    return `${head}${discounts ? `\n\n${discounts}` : ""}\n\n${ctx.tr("choose_quantity")}`;
+  };
+  const kb = quantityKeyboard(ctx, product.id, stock);
+  if (textIcons && emojiId) {
+    try {
+      return await ctx.reply(text(true), { parse_mode: "HTML", reply_markup: kb });
+    } catch (err) {
+      // Custom emoji in text need a Premium bot owner: fall back to a plain bullet.
+      if (!(err instanceof GrammyError && err.error_code === 400)) throw err;
+      logger.warn("bot.text_icon_failed", { err });
+      textIcons = false;
+    }
+  }
+  await ctx.reply(text(false), { parse_mode: "HTML", reply_markup: kb });
+}
+
 const QUANTITY_PRESETS = [1, 2, 3, 5, 10, 15, 20, 25];
 
-/** Preset quantities (capped by stock and by the per-order limit), four per row, plus a custom amount. */
+/** Preset quantities (capped by stock and by the per-order limit), four per row, a custom amount, then back/cancel. */
 function quantityKeyboard(ctx: StoreContext, productId: string, stock: number) {
   const kb = new InlineKeyboard();
   const max = Math.min(stock, MAX_QUANTITY_PER_ORDER);
@@ -193,7 +223,7 @@ function quantityKeyboard(ctx: StoreContext, productId: string, stock: number) {
     kb.text(ctx.tr("quantity_button", { quantity: q }), `qty:${productId}:${q}`);
   });
   if (max > 1) kb.row().text(ctx.tr("custom_quantity_button"), `qc:${productId}`);
-  return kb.row().text(ctx.tr("back"), "menu:buy");
+  return kb.row().text(ctx.tr("back_to_product"), `p:${productId}`).text(ctx.tr("cancel_button"), "qx");
 }
 
 /** Customer typed a quantity after tapping "Custom quantity". */
@@ -226,7 +256,7 @@ async function showPaymentMethods(ctx: StoreContext, productId: string, quantity
     const label = methodLabel(ctx, m);
     kb.text(`${label} — ${formatMoney(total, m.currency, ctx.locale)}`, `pay:${product.id}:${quantity}:${m.key}`).row();
   }
-  kb.text(ctx.tr("back"), `p:${product.id}`);
+  kb.text(ctx.tr("back"), `buy:${product.id}`);
   const surchargeNotes = methods.filter((m) => m.surchargePercent > 0).map((m) => ctx.tr("payment_methods_surcharge_note", { method: methodLabel(ctx, m), percent: percentText(ctx, m.surchargePercent) }));
   let summary = ctx.tr("quantity_summary", { product: localizedName(product, ctx.locale), quantity });
   const tiers = bulkDiscountTiers(product.bulkDiscounts);
@@ -550,6 +580,15 @@ export function createBot(): Bot<StoreContext> {
   bot.callbackQuery(/^p:(\w+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     await showProduct(ctx, ctx.match[1]!);
+  });
+  bot.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showQuantity(ctx, ctx.match[1]!);
+  });
+  bot.callbackQuery("qx", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    if (ctx.user.botState) await setBotState(ctx.user.id, null); // drops a pending custom quantity
+    await ctx.deleteMessage().catch(() => ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined));
   });
   bot.callbackQuery(/^ntf:(\w+)$/, async (ctx) => {
     const productId = ctx.match[1]!;
