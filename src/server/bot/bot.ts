@@ -12,7 +12,7 @@ import { serviceEmoji } from "@/lib/service-emoji";
 import { bulkDiscountTiers, bulkPercentOff, discountedUnitCents, productUnitCents } from "@/lib/bulk-discounts";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
 import { listProducts, sellableStock, localizedDescription, localizedName, productLogoUrl } from "@/server/products/products.service";
-import { availablePaymentMethods, cancelOrderByUser, createOrder, getUserOrder, listUserOrders, MAX_QUANTITY_PER_ORDER, methodAmountCents, syncOrderPayment } from "@/server/orders/orders.service";
+import { availablePaymentMethods, cancelOrderByUser, claimPaidOrder, createOrder, getUserOrder, listUserOrders, MAX_QUANTITY_PER_ORDER, methodAmountCents, syncOrderPayment } from "@/server/orders/orders.service";
 import { getSettings, type PaymentMethodConfig } from "@/server/settings/settings.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import { binancePayAvailable, cancelDeposit, claimTransaction, createDeposit, DepositError, type DepositErrorCode } from "@/server/wallet/deposit.service";
@@ -392,6 +392,8 @@ async function showOrder(ctx: StoreContext, orderId: string) {
     if (order.payment?.pixCopyPaste) addCopyPixButton(ctx, kb, order.payment.pixCopyPaste);
     kb.text(ctx.tr("check_status"), `st:${order.id}`).row().text(ctx.tr("cancel_order"), `cx:${order.id}`);
   }
+  // Paid but not delivered yet (stock ran out): the customer claims it whenever they are ready.
+  if (order.status === "PAID" && !items.length) kb.text(ctx.tr("claim_order"), `rs:${order.id}`);
   await ctx.reply(text, { parse_mode: "HTML", reply_markup: kb });
 }
 
@@ -404,6 +406,23 @@ async function sendDeliveryFile(ctx: StoreContext, orderId: string, format: Expo
   await ctx.replyWithDocument(new InputFile(file.content, file.filename), {
     caption: ctx.tr("download_caption", { number: found.order.number, count: found.items.length }),
   });
+}
+
+/** "Claim product": assigns stock (or buys from the supplier) and delivers right now. Only while the order is PAID. */
+async function claimOrder(ctx: StoreContext, orderId: string) {
+  const found = await getUserOrder(ctx.user.id, orderId);
+  if (!found) return;
+  if (found.order.status !== "PAID") {
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined);
+    return showOrder(ctx, orderId);
+  }
+  if (!(await rateLimit(`bot:claim:${ctx.user.id}`, 4, 60))) return ctx.reply(ctx.tr("too_many_requests"));
+  await ctx.reply(ctx.tr("claim_working", { number: found.order.number }));
+  const outcome = await claimPaidOrder(ctx.user.id, orderId);
+  // "delivered": the delivery message (with the items) was sent by the delivery service.
+  if (outcome === "unavailable") return ctx.reply(ctx.tr("claim_unavailable", { number: found.order.number }));
+  await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => undefined);
+  if (outcome === "not_claimable") return showOrder(ctx, orderId);
 }
 
 async function checkStatus(ctx: StoreContext, orderId: string) {
@@ -648,6 +667,10 @@ export function createBot(): Bot<StoreContext> {
     const r = await cancelOrderByUser(ctx.user.id, ctx.match[1]!);
     if (r) await ctx.reply(ctx.tr("order_cancelled", { number: r.number }));
     else await showOrder(ctx, ctx.match[1]!);
+  });
+  bot.callbackQuery(/^rs:(\w+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await claimOrder(ctx, ctx.match[1]!);
   });
   bot.callbackQuery(/^dl:(\w+):(txt|csv)$/, async (ctx) => {
     await ctx.answerCallbackQuery();

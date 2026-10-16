@@ -5,7 +5,9 @@ import { db } from "@/server/common/db";
 import { AppError, Errors } from "@/server/common/errors";
 import { logger } from "@/server/common/logger";
 import { decrypt } from "@/server/common/crypto";
-import { enforceRateLimit } from "@/server/common/rate-limit";
+import { enforceRateLimit, rateLimit } from "@/server/common/rate-limit";
+import { escapeHtml } from "@/i18n";
+import { alertAdmins } from "@/server/notifications/telegram";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { orderEvent } from "@/server/orders/order-events";
 import { applyPaymentStatus } from "@/server/orders/payment-lifecycle.service";
@@ -15,7 +17,7 @@ import { getSettings, type PaymentMethodConfig } from "@/server/settings/setting
 import { localizedName } from "@/server/products/products.service";
 import { deliverOrder } from "@/server/notifications/delivery.service";
 import { supplierUnits } from "@/server/supplier/supplier-stock";
-import { fulfillFromSupplier } from "@/server/supplier/supplier.service";
+import { customerLabel, fulfillFromSupplier } from "@/server/supplier/supplier.service";
 import { InsufficientBalanceError } from "@/server/wallet/ledger.service";
 import type { CreatePaymentResult } from "@/server/payments/payment-provider";
 
@@ -355,31 +357,70 @@ export async function resendDelivery(orderId: string, adminId: string) {
  * Without enough local stock, the missing units are bought from the supplier when the product is linked.
  */
 export async function fulfillOutOfStockOrder(orderId: string, adminId: string, ip: string | null) {
-  let source: "stock" | "supplier" = "stock";
-  let items: number;
-  try {
-    items = await assignLocalStock(orderId, adminId);
-  } catch (err) {
-    if (!(err instanceof AppError && err.code === "OUT_OF_STOCK")) throw err;
-    const supplier = await fulfillFromSupplier(orderId);
-    if (supplier.kind === "not_applicable") throw err;
-    if (supplier.kind === "failed") throw Errors.conflict(`Sem estoque local e a compra no fornecedor falhou: ${supplier.code} — ${supplier.message}`, "OUT_OF_STOCK");
-    source = "supplier";
-    items = supplier.units;
-  }
+  const { items, source } = await assignMissingStock(orderId, { actorType: "ADMIN", adminId });
   await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.ORDER_UPDATED, resourceType: "order", resourceId: orderId, details: { action: "fulfill", items, source } });
   // The supplier path already delivered the order.
   return source === "supplier" ? "delivered" : deliverOrder(orderId);
 }
 
-async function assignLocalStock(orderId: string, adminId: string): Promise<number> {
+export type ClaimOutcome = "delivered" | "unavailable" | "not_claimable";
+
+/**
+ * "Claim product" button of the customer for a paid order that is still waiting for stock: does exactly
+ * what the admin's "Atribuir estoque e entregar" does, at the moment the customer chooses (so time-limited
+ * warranties only start when they are ready to use the product). Safe to tap repeatedly.
+ */
+export async function claimPaidOrder(userId: string, orderId: string): Promise<ClaimOutcome> {
+  const order = await db().order.findFirst({ where: { id: orderId, userId }, include: { user: true, _count: { select: { inventoryItems: { where: { status: "SOLD" } } } } } });
+  if (!order || order.status !== "PAID") return "not_claimable";
+  // Every unit already assigned (only the message failed): just deliver.
+  if (order._count.inventoryItems >= order.quantity) return (await deliverOrder(orderId)) === "delivered" ? "delivered" : "unavailable";
+  try {
+    const { source } = await assignMissingStock(orderId, { actorType: "BOT" });
+    if (source === "stock") await deliverOrder(orderId);
+    return "delivered";
+  } catch (err) {
+    if (!(err instanceof AppError && err.code === "OUT_OF_STOCK")) throw err;
+    logger.info("order.claim_unavailable", { orderId, reason: err.message });
+    // One alert per order every 30 min, however many times the customer taps.
+    if (await rateLimit(`alert:claim:${orderId}`, 1, 30 * 60)) {
+      await alertAdmins(
+        [
+          "📥 <b>Cliente tentou resgatar e não há estoque</b>",
+          "",
+          `👤 Cliente: ${customerLabel(order.user)}`,
+          `📦 Produto: <b>${escapeHtml(order.productName)}</b> × ${order.quantity}`,
+          `🧾 Pedido <b>#${order.number}</b>`,
+          "",
+          escapeHtml(err.message),
+        ].join("\n"),
+      );
+    }
+    return "unavailable";
+  }
+}
+
+/** Binds the units a PAID order is missing: local stock first, else a purchase at the supplier (which also delivers). */
+async function assignMissingStock(orderId: string, actor: { actorType: "ADMIN" | "BOT"; adminId?: string }): Promise<{ items: number; source: "stock" | "supplier" }> {
+  try {
+    return { items: await assignLocalStock(orderId, actor), source: "stock" };
+  } catch (err) {
+    if (!(err instanceof AppError && err.code === "OUT_OF_STOCK")) throw err;
+    const supplier = await fulfillFromSupplier(orderId);
+    if (supplier.kind === "not_applicable") throw err;
+    if (supplier.kind === "failed") throw Errors.conflict(`Sem estoque local e a compra no fornecedor falhou: ${supplier.code} — ${supplier.message}`, "OUT_OF_STOCK");
+    return { items: supplier.units, source: "supplier" };
+  }
+}
+
+async function assignLocalStock(orderId: string, actor: { actorType: "ADMIN" | "BOT"; adminId?: string }): Promise<number> {
   return db().$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
     if (order.status !== "PAID") throw Errors.conflict("Pedido não está pago aguardando entrega");
     const n = await sellForOrder(tx, { productId: order.productId, orderId, userId: order.userId, quantity: order.quantity });
     if (n < order.quantity) throw Errors.outOfStock();
-    await orderEvent({ orderId, type: "ITEM_ASSIGNED", actorType: "ADMIN", adminId, details: { quantity: order.quantity } }, tx);
+    await orderEvent({ orderId, type: "ITEM_ASSIGNED", ...actor, details: { quantity: order.quantity } }, tx);
     return n;
   });
 }

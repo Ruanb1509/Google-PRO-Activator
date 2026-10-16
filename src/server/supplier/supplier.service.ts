@@ -220,7 +220,7 @@ export async function alertSupplierFailure(order: AlertOrder, outcome: Extract<S
       `🧾 Pedido <b>#${order.number}</b> · pago ${formatMoney(order.amountCents, order.currency)}`,
       "",
       `O cliente pagou mas <b>não recebeu</b> o produto — ${escapeHtml(reason)}.`,
-      "Assim que resolver, abra o pedido no painel e use “Atribuir estoque e entregar”, ou reembolse.",
+      "Assim que resolver, o cliente pode tocar em “Resgatar produto” no bot (recebe na hora), ou abra o pedido no painel e use “Atribuir estoque e entregar”, ou reembolse.",
     ].join("\n"),
   );
 }

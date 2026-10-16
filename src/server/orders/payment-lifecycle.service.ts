@@ -129,11 +129,12 @@ async function afterCommit(outcome: Outcome): Promise<void> {
         if (supplier.kind === "fulfilled") return;
         const order = await db().order.findUniqueOrThrow({ where: { id: outcome.orderId }, include: { user: true } });
         const locale = order.user.locale ?? order.locale;
-        await sendHtml(order.user.telegramId, t(locale, "paid_out_of_stock", { number: order.number })).catch(() => undefined);
+        const claim = { inline_keyboard: [[{ text: t(locale, "claim_order"), callback_data: `rs:${order.id}` }]] };
+        await sendHtml(order.user.telegramId, t(locale, "paid_out_of_stock", { number: order.number }), claim).catch(() => undefined);
         // Linked to the supplier: one alert with the customer, product and reason. Otherwise the generic one.
         if (supplier.kind === "failed") return void (await alertSupplierFailure(order, supplier));
         const assigned = await db().inventoryItem.count({ where: { orderId: order.id, status: "SOLD" } });
-        await alertAdmins(`🚨 Pedido <b>#${order.number}</b> foi PAGO mas o produto <b>${escapeHtml(order.productName)}</b> está sem estoque (${assigned}/${order.quantity} unidades atribuídas). Reponha o estoque e use “Atribuir estoque e entregar”, ou reembolse.`);
+        await alertAdmins(`🚨 Pedido <b>#${order.number}</b> foi PAGO mas o produto <b>${escapeHtml(order.productName)}</b> está sem estoque (${assigned}/${order.quantity} unidades atribuídas). Reponha o estoque e use “Atribuir estoque e entregar”, ou reembolse. O cliente também pode tocar em “Resgatar produto” no bot.`);
       }
     } else if (outcome.kind === "refunded") {
       const order = await db().order.findUniqueOrThrow({ where: { id: outcome.orderId }, include: { user: true } });
