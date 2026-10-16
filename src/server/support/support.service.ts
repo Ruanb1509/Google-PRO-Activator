@@ -10,6 +10,7 @@ import { escapeHtml, t } from "@/i18n";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { alertAdmins, sendHtml, telegramApi } from "@/server/notifications/telegram";
 import { getOrderDelivery } from "@/server/notifications/delivery.service";
+import { customerLabel } from "@/server/supplier/supplier.service";
 
 export const MAX_MESSAGE_LENGTH = 3500;
 
@@ -30,12 +31,27 @@ export async function getOpenTicket(userId: string) {
   return db().supportTicket.findFirst({ where: { userId, status: { not: "CLOSED" } }, include: { order: { select: { number: true } } } });
 }
 
-async function notifyTeam(ticket: { id: string; number: number; type: TicketType }, user: Pick<User, "username" | "firstName" | "telegramId">, text: string, isNew: boolean, hasPhoto: boolean) {
-  const who = user.username ? `@${user.username}` : (user.firstName ?? user.telegramId.toString());
+/** Telegram alert to the admins with the customer's whole message (Telegram caps a message at 4096 chars). */
+async function notifyTeam(
+  ticket: { id: string; number: number; type: TicketType; order: { number: number } | null },
+  user: Pick<User, "username" | "firstName" | "telegramId">,
+  text: string,
+  isNew: boolean,
+  hasPhoto: boolean,
+) {
   const kind = ticket.type === "PRE_SALE" ? "pré-compra" : "pós-compra";
-  const preview = text ? escapeHtml(text.slice(0, 300)) : "";
   await alertAdmins(
-    `💬 ${isNew ? "Novo ticket" : "Nova mensagem no ticket"} <b>#${ticket.number}</b> (${kind}) de ${escapeHtml(who)}${hasPhoto ? " 📎 imagem" : ""}\n\n${preview}\n\n${env().APP_URL}/support/${ticket.id}`,
+    [
+      `💬 <b>${isNew ? "Novo ticket" : "Nova mensagem no ticket"} #${ticket.number}</b> (${kind})`,
+      "",
+      `👤 Cliente: ${customerLabel(user)}`,
+      ...(ticket.order ? [`🧾 Pedido <b>#${ticket.order.number}</b>`] : []),
+      "",
+      ...(text ? [escapeHtml(text)] : []),
+      ...(hasPhoto ? ["📎 <i>enviou uma imagem — veja no painel</i>"] : []),
+      "",
+      `👉 Responder: ${env().APP_URL}/support/${ticket.id}`,
+    ].join("\n"),
   );
 }
 
