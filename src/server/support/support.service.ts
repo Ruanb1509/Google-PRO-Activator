@@ -1,4 +1,4 @@
-import { InlineKeyboard } from "grammy";
+import { InlineKeyboard, InputFile } from "grammy";
 import type { Prisma, User } from "@/generated/prisma/client";
 import type { TicketStatus, TicketType } from "@/generated/prisma/enums";
 import { db } from "@/server/common/db";
@@ -176,21 +176,57 @@ export async function getTicketDelivery(ticketId: string, orderId: string | null
   return getOrderDelivery(targetId, { adminId, ip, via: "support", ticket: ticket.number, userId: ticket.userId });
 }
 
-/** Support reply: stored, then delivered to the customer in the bot (in their language). */
-export async function replyToTicket(ticketId: string, adminId: string, rawText: string, ip: string | null) {
-  const text = cleanText(rawText, false);
+/** Image attached by the admin to a reply (decoded from the dashboard's base64 upload). */
+export interface ReplyImage {
+  data: Buffer;
+  contentType: "image/jpeg" | "image/png" | "image/webp";
+}
+
+export const MAX_REPLY_IMAGE_BYTES = 3 * 1024 * 1024;
+const CAPTION_LIMIT = 1024; // Telegram's photo caption cap
+
+/**
+ * Support reply: stored, then delivered to the customer in the bot (in their language).
+ * With an image the photo goes out first — Telegram's file_id is what we keep, so the reply is
+ * only stored once the customer actually received it.
+ */
+export async function replyToTicket(ticketId: string, adminId: string, rawText: string, ip: string | null, image?: ReplyImage) {
+  const text = cleanText(rawText, Boolean(image));
   const ticket = await db().supportTicket.findUnique({ where: { id: ticketId }, include: { user: true } });
   if (!ticket) throw Errors.notFound("Ticket");
-  await db().$transaction([
-    db().supportMessage.create({ data: { ticketId, author: "SUPPORT", adminId, text } }),
-    db().supportTicket.update({ where: { id: ticketId }, data: { status: "ANSWERED", closedAt: null, lastMessageAt: new Date() } }),
-  ]);
-  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.SUPPORT_REPLIED, resourceType: "support_ticket", resourceId: ticketId, details: { number: ticket.number } });
 
   const locale = ticket.user.locale ?? "en_US";
   const kb = new InlineKeyboard().text(t(locale, "support_reply_button"), "sup:write").row().text(t(locale, "support_close_button"), `sup:close:${ticketId}`);
+  const html = t(locale, "support_reply", { number: ticket.number, text }).trim();
+  const chatId = String(ticket.user.telegramId);
+
+  let telegramFileId: string | null = null;
+  if (image) {
+    const ext = image.contentType.split("/")[1];
+    const fitsCaption = html.length <= CAPTION_LIMIT;
+    try {
+      const sent = await telegramApi().sendPhoto(chatId, new InputFile(image.data, `suporte.${ext}`), {
+        ...(fitsCaption ? { caption: html, parse_mode: "HTML", reply_markup: kb } : {}),
+      });
+      telegramFileId = sent.photo.at(-1)?.file_id ?? null;
+    } catch (err) {
+      logger.warn("support.reply_photo_failed", { err, ticketId });
+      throw Errors.badRequest(`Não foi possível enviar a imagem ao cliente no Telegram: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!fitsCaption) {
+      await sendHtml(chatId, html, kb).catch((err) => logger.warn("support.reply_delivery_failed", { err, ticketId }));
+    }
+  }
+
+  await db().$transaction([
+    db().supportMessage.create({ data: { ticketId, author: "SUPPORT", adminId, text, telegramFileId } }),
+    db().supportTicket.update({ where: { id: ticketId }, data: { status: "ANSWERED", closedAt: null, lastMessageAt: new Date() } }),
+  ]);
+  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.SUPPORT_REPLIED, resourceType: "support_ticket", resourceId: ticketId, details: { number: ticket.number, image: Boolean(image) } });
+
+  if (image) return { delivered: true };
   try {
-    await sendHtml(ticket.user.telegramId, t(locale, "support_reply", { number: ticket.number, text }), kb);
+    await sendHtml(chatId, html, kb);
     return { delivered: true };
   } catch (err) {
     // e.g. the customer blocked the bot; the reply stays in the ticket history.
@@ -214,7 +250,7 @@ export async function setTicketStatus(ticketId: string, status: "OPEN" | "CLOSED
   }
 }
 
-/** Downloads a customer screenshot from Telegram (the bot token never reaches the browser). */
+/** Downloads a ticket image (customer screenshot or admin attachment) from Telegram (the bot token never reaches the browser). */
 export async function fetchMessageImage(messageId: string): Promise<{ body: ArrayBuffer; contentType: string } | null> {
   const msg = await db().supportMessage.findUnique({ where: { id: messageId }, select: { telegramFileId: true } });
   if (!msg?.telegramFileId) return null;

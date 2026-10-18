@@ -51,6 +51,48 @@ const QUICK_REPLIES = [
   "Resolvido! Se precisar de mais alguma coisa, é só chamar.",
 ];
 
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+const MAX_IMAGE_SIDE = 2560;
+
+interface Attachment {
+  contentType: "image/jpeg" | "image/png" | "image/webp";
+  base64: string;
+  previewUrl: string;
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** Keeps small JPEG/PNG/WebP files as they are; anything else (or too big) is re-encoded as JPEG. */
+async function prepareImage(file: File): Promise<Attachment> {
+  if (!file.type.startsWith("image/")) throw new Error("O arquivo precisa ser uma imagem.");
+  const bitmap = await createImageBitmap(file).catch(() => {
+    throw new Error("Não foi possível ler a imagem.");
+  });
+  const keep = ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= MAX_IMAGE_BYTES && Math.max(bitmap.width, bitmap.height) <= MAX_IMAGE_SIDE;
+  let blob: Blob = file;
+  if (!keep) {
+    const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Falha ao converter a imagem."))), "image/jpeg", 0.85));
+    if (blob.size > MAX_IMAGE_BYTES) throw new Error("Imagem muito grande (máx. 3 MB).");
+  }
+  bitmap.close();
+  return { contentType: keep ? (file.type as Attachment["contentType"]) : "image/jpeg", base64: await blobToBase64(blob), previewUrl: URL.createObjectURL(blob) };
+}
+
 export default function TicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { data, error, loading, reload, setData } = useApi<TicketDetail>(`/api/admin/support/${id}`);
@@ -58,6 +100,8 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
   const action = useAction();
   const [text, setText] = useState("");
   const [zoom, setZoom] = useState<string | null>(null);
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const [pickedOrder, setPickedOrder] = useState<string | null>(null);
   const deliveryOrderId = pickedOrder ?? data?.order?.id ?? null;
@@ -73,19 +117,34 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
     return () => clearInterval(timer);
   }, [reload]);
 
+  useEffect(() => () => {
+    if (attachment) URL.revokeObjectURL(attachment.previewUrl);
+  }, [attachment]);
+
   if (loading && !data) return <Loading />;
   if (error && !data) return <ErrorBox error={error} onRetry={reload} />;
   if (!data) return null;
 
   async function send() {
     const body = text.trim();
-    if (!body) return;
-    const r = await action.run("reply", () => api<{ delivery: { delivered: boolean; error?: string }; ticket: TicketDetail }>(`/api/admin/support/${id}/reply`, { method: "POST", body: { text: body } }));
+    if (!body && !attachment) return;
+    const image = attachment ? { contentType: attachment.contentType, base64: attachment.base64 } : undefined;
+    const r = await action.run("reply", () => api<{ delivery: { delivered: boolean; error?: string }; ticket: TicketDetail }>(`/api/admin/support/${id}/reply`, { method: "POST", body: { text: body, image } }));
     if (!r) return;
     setData(r.ticket);
     setText("");
+    setAttachment(null);
     if (r.delivery.delivered) action.setMessage("Resposta enviada ao cliente no Telegram.");
     else action.setError(`Resposta salva, mas não foi entregue no Telegram (o cliente pode ter bloqueado o bot): ${r.delivery.error ?? ""}`);
+  }
+
+  async function attach(file: File | undefined | null) {
+    if (!file) return;
+    try {
+      setAttachment(await prepareImage(file));
+    } catch (err) {
+      action.setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function setStatus(status: "OPEN" | "CLOSED") {
@@ -138,7 +197,7 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
                     {m.hasImage && (
                       <button type="button" onClick={() => setZoom(`/api/admin/support/files/${m.id}`)} className="mb-2 block">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={`/api/admin/support/files/${m.id}`} alt="Imagem enviada pelo cliente" className="max-h-64 rounded-lg" loading="lazy" />
+                        <img src={`/api/admin/support/files/${m.id}`} alt={mine ? "Imagem enviada pelo suporte" : "Imagem enviada pelo cliente"} className="max-h-64 rounded-lg" loading="lazy" />
                       </button>
                     )}
                     {m.text && <p className="whitespace-pre-wrap break-words">{m.text}</p>}
@@ -170,12 +229,43 @@ export default function TicketPage({ params }: { params: Promise<{ id: string }>
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void send();
                 }}
+                onPaste={(e) => {
+                  const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
+                  if (file) {
+                    e.preventDefault();
+                    void attach(file);
+                  }
+                }}
+              />
+              {attachment && (
+                <div className="flex items-start gap-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={attachment.previewUrl} alt="Imagem anexada" className="max-h-32 rounded-lg border border-line" />
+                  <button type="button" onClick={() => setAttachment(null)} className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:border-accent hover:text-fg">
+                    Remover
+                  </button>
+                </div>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  void attach(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
               />
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-muted">Ctrl+Enter para enviar · {text.length}/3500</span>
-                <Button variant="primary" onClick={() => void send()} loading={action.busy === "reply"} disabled={!text.trim()}>
-                  Enviar resposta
-                </Button>
+                <span className="text-xs text-muted">Ctrl+Enter para enviar · cole ou anexe uma imagem · {text.length}/3500</span>
+                <span className="flex items-center gap-2">
+                  <Button onClick={() => fileRef.current?.click()} disabled={action.busy === "reply"}>
+                    📎 {attachment ? "Trocar imagem" : "Anexar imagem"}
+                  </Button>
+                  <Button variant="primary" onClick={() => void send()} loading={action.busy === "reply"} disabled={!text.trim() && !attachment}>
+                    Enviar resposta
+                  </Button>
+                </span>
               </div>
             </div>
           ) : (
