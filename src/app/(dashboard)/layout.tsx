@@ -18,6 +18,7 @@ const NAV: { href: string; label: string; icon: string; adminOnly?: boolean }[] 
   { href: "/orders", label: "Pedidos", icon: "🧾" },
   { href: "/customers", label: "Clientes", icon: "👥" },
   { href: "/support", label: "Suporte", icon: "💬" },
+  { href: "/broadcast", label: "Aviso geral", icon: "📢", adminOnly: true },
   { href: "/deposits", label: "Depósitos", icon: "👛" },
   { href: "/webhooks", label: "Webhooks", icon: "🔔" },
   { href: "/audit", label: "Auditoria", icon: "🛡️" },

@@ -5,6 +5,7 @@ import { db } from "@/server/common/db";
 import { env } from "@/server/config/env";
 import { AppError, Errors, isUniqueViolation } from "@/server/common/errors";
 import { logger } from "@/server/common/logger";
+import { CAPTION_LIMIT, type UploadedImage } from "@/server/common/image-upload";
 import { rateLimit } from "@/server/common/rate-limit";
 import { escapeHtml, t } from "@/i18n";
 import { audit, AuditActions } from "@/server/audit/audit.service";
@@ -176,21 +177,12 @@ export async function getTicketDelivery(ticketId: string, orderId: string | null
   return getOrderDelivery(targetId, { adminId, ip, via: "support", ticket: ticket.number, userId: ticket.userId });
 }
 
-/** Image attached by the admin to a reply (decoded from the dashboard's base64 upload). */
-export interface ReplyImage {
-  data: Buffer;
-  contentType: "image/jpeg" | "image/png" | "image/webp";
-}
-
-export const MAX_REPLY_IMAGE_BYTES = 3 * 1024 * 1024;
-const CAPTION_LIMIT = 1024; // Telegram's photo caption cap
-
 /**
  * Support reply: stored, then delivered to the customer in the bot (in their language).
  * With an image the photo goes out first — Telegram's file_id is what we keep, so the reply is
  * only stored once the customer actually received it.
  */
-export async function replyToTicket(ticketId: string, adminId: string, rawText: string, ip: string | null, image?: ReplyImage) {
+export async function replyToTicket(ticketId: string, adminId: string, rawText: string, ip: string | null, image?: UploadedImage) {
   const text = cleanText(rawText, Boolean(image));
   const ticket = await db().supportTicket.findUnique({ where: { id: ticketId }, include: { user: true } });
   if (!ticket) throw Errors.notFound("Ticket");

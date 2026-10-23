@@ -45,6 +45,7 @@ export const AuditActions = {
   PRODUCT_PRICE_CHANGED: "product.price_changed",
   PRODUCT_DELETED: "product.deleted",
   PROMO_BROADCAST: "product.promo_broadcast",
+  BROADCAST_SENT: "broadcast.sent",
   INVENTORY_ADDED: "inventory.added",
   INVENTORY_UPDATED: "inventory.updated",
   INVENTORY_REMOVED: "inventory.removed",
