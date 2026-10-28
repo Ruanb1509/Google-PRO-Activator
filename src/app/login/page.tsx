@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { api, ApiError, errorMessage } from "@/lib/api";
+import { Storefront } from "@phosphor-icons/react";
 import { Button, ErrorBox, Field } from "@/components/ui";
 
 export default function LoginPage() {
@@ -41,8 +42,10 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center px-4">
       <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-2xl border border-line bg-card p-6">
         <div>
-          <div className="text-2xl">🛒</div>
-          <h1 className="mt-2 text-xl font-semibold">Painel da Loja</h1>
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/15 text-accent">
+            <Storefront size={22} weight="duotone" />
+          </span>
+          <h1 className="mt-4 text-xl font-semibold">Painel da Loja</h1>
           <p className="text-sm text-muted">Acesso restrito a administradores.</p>
         </div>
         {error && <ErrorBox error={error} />}

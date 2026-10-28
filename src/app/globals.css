@@ -1,13 +1,14 @@
 @import "tailwindcss";
 
-/* Design tokens (dark first). Utilities like bg-card / text-muted / border-line read these vars. */
+/* Design tokens (dark first). Utilities like bg-card / text-muted / border-line read these vars.
+   Dark surfaces come from the approved flat palette: #181818 / #1F1F1F / #272727 / #313131. */
 @theme {
-  --color-bg: #0b0f17;
-  --color-card: #121826;
-  --color-card-2: #182033;
-  --color-line: #253049;
-  --color-fg: #e6eaf2;
-  --color-muted: #8b95a9;
+  --color-bg: #181818;
+  --color-card: #1f1f1f;
+  --color-card-2: #272727;
+  --color-line: #313131;
+  --color-fg: #ededed;
+  --color-muted: #9b9b9b;
   --color-accent: #4f8cff;
   --color-accent-fg: #ffffff;
   --color-ok: #22c55e;
@@ -19,16 +20,26 @@
   --color-chart-2: #d95926;
   --color-chart-3: #199e70;
   --color-chart-4: #c98500;
+
+  /* Weighted motion: every `transition` decelerates into place. */
+  --ease-weighted: cubic-bezier(0.22, 1, 0.36, 1);
+  --default-transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  --default-transition-duration: 300ms;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
-    --color-bg: #f5f7fb;
+    --color-bg: #f6f6f6;
     --color-card: #ffffff;
-    --color-card-2: #eef2f8;
-    --color-line: #dbe2ee;
-    --color-fg: #111827;
-    --color-muted: #5b6475;
+    --color-card-2: #f0f0f0;
+    --color-line: #e3e3e3;
+    --color-fg: #141414;
+    --color-muted: #5f5f5f;
     --color-accent: #2563eb;
     --color-chart-1: #2a78d6;
     --color-chart-2: #eb6834;
@@ -44,14 +55,28 @@ body {
 }
 
 body {
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+p {
+  text-wrap: pretty;
 }
 
 input,
 select,
 textarea {
   color-scheme: dark light;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .input {
@@ -61,16 +86,64 @@ textarea {
   background: var(--color-card-2);
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
+  line-height: 1.25rem;
   outline: none;
+  transition: border-color 300ms var(--ease-weighted), box-shadow 300ms var(--ease-weighted);
+}
+.input:hover {
+  border-color: color-mix(in srgb, var(--color-muted) 50%, var(--color-line));
 }
 .input:focus {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
 .label {
   display: block;
   font-size: 0.75rem;
+  line-height: 1rem;
   font-weight: 500;
   color: var(--color-muted);
   margin-bottom: 0.25rem;
+}
+
+/* Skeleton placeholders shaped like the real layout (no spinners for page loads). */
+.skeleton {
+  border-radius: 0.5rem;
+  background: var(--color-card-2);
+  animation: skeleton-pulse 1.6s var(--ease-weighted) infinite;
+}
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Mobile menu: links rise in one after another when the panel opens (60ms steps, capped). */
+@media (max-width: 1023px) {
+  .nav-panel .nav-item {
+    opacity: 0;
+    transform: translateY(24px);
+    transition:
+      opacity 500ms var(--ease-weighted),
+      transform 500ms var(--ease-weighted),
+      background-color 300ms var(--ease-weighted),
+      color 300ms var(--ease-weighted);
+  }
+  .nav-panel[data-open="true"] .nav-item {
+    opacity: 1;
+    transform: none;
+    transition-delay: min(calc(var(--i, 0) * 60ms), 340ms), min(calc(var(--i, 0) * 60ms), 340ms), 0ms, 0ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation: none !important;
+    transition-property: opacity, color, background-color, border-color !important;
+  }
+  .nav-panel .nav-item {
+    transform: none !important;
+  }
 }
