@@ -7,7 +7,7 @@ import { AppError, Errors, isUniqueViolation } from "@/server/common/errors";
 import { logger } from "@/server/common/logger";
 import { CAPTION_LIMIT, type UploadedImage } from "@/server/common/image-upload";
 import { rateLimit } from "@/server/common/rate-limit";
-import { escapeHtml, t } from "@/i18n";
+import { detectLocale, escapeHtml, t } from "@/i18n";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { alertAdmins, sendHtml, telegramApi } from "@/server/notifications/telegram";
 import { getOrderDelivery } from "@/server/notifications/delivery.service";
@@ -178,6 +178,29 @@ export async function getTicketDelivery(ticketId: string, orderId: string | null
 }
 
 /**
+ * Sends a photo to the customer with `html` as its caption (or right after it, when it is longer than
+ * Telegram's caption cap). Returns Telegram's file_id; throws when the photo itself could not be sent.
+ */
+async function sendPhotoMessage(chatId: string, html: string, image: UploadedImage, kb: InlineKeyboard | undefined, name: string, logCtx: Record<string, unknown>) {
+  const ext = image.contentType.split("/")[1];
+  const fitsCaption = html.length <= CAPTION_LIMIT;
+  let fileId: string | null;
+  try {
+    const sent = await telegramApi().sendPhoto(chatId, new InputFile(image.data, `${name}.${ext}`), {
+      ...(fitsCaption ? { caption: html, parse_mode: "HTML", ...(kb ? { reply_markup: kb } : {}) } : {}),
+    });
+    fileId = sent.photo.at(-1)?.file_id ?? null;
+  } catch (err) {
+    logger.warn("support.photo_failed", { err, ...logCtx });
+    throw Errors.badRequest(`Não foi possível enviar a imagem ao cliente no Telegram: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!fitsCaption) {
+    await sendHtml(chatId, html, kb).catch((err) => logger.warn("support.photo_text_failed", { err, ...logCtx }));
+  }
+  return fileId;
+}
+
+/**
  * Support reply: stored, then delivered to the customer in the bot (in their language).
  * With an image the photo goes out first — Telegram's file_id is what we keep, so the reply is
  * only stored once the customer actually received it.
@@ -192,23 +215,7 @@ export async function replyToTicket(ticketId: string, adminId: string, rawText: 
   const html = t(locale, "support_reply", { number: ticket.number, text }).trim();
   const chatId = String(ticket.user.telegramId);
 
-  let telegramFileId: string | null = null;
-  if (image) {
-    const ext = image.contentType.split("/")[1];
-    const fitsCaption = html.length <= CAPTION_LIMIT;
-    try {
-      const sent = await telegramApi().sendPhoto(chatId, new InputFile(image.data, `suporte.${ext}`), {
-        ...(fitsCaption ? { caption: html, parse_mode: "HTML", reply_markup: kb } : {}),
-      });
-      telegramFileId = sent.photo.at(-1)?.file_id ?? null;
-    } catch (err) {
-      logger.warn("support.reply_photo_failed", { err, ticketId });
-      throw Errors.badRequest(`Não foi possível enviar a imagem ao cliente no Telegram: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (!fitsCaption) {
-      await sendHtml(chatId, html, kb).catch((err) => logger.warn("support.reply_delivery_failed", { err, ticketId }));
-    }
-  }
+  const telegramFileId = image ? await sendPhotoMessage(chatId, html, image, kb, "suporte", { ticketId }) : null;
 
   await db().$transaction([
     db().supportMessage.create({ data: { ticketId, author: "SUPPORT", adminId, text, telegramFileId } }),
@@ -225,6 +232,60 @@ export async function replyToTicket(ticketId: string, adminId: string, rawText: 
     logger.warn("support.reply_delivery_failed", { err, ticketId });
     return { delivered: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Admin starts a conversation from the customer page: the message goes into the customer's open ticket
+ * (one is opened if there is none), so the customer can answer with the usual "Responder" button.
+ */
+export async function startConversation(userId: string, adminId: string, rawText: string, ip: string | null, image?: UploadedImage) {
+  cleanText(rawText, Boolean(image));
+  const user = await db().user.findUnique({ where: { id: userId }, select: { id: true, _count: { select: { orders: true } } } });
+  if (!user) throw Errors.notFound("Customer");
+
+  let ticket = await getOpenTicket(userId);
+  let created = false;
+  if (!ticket) {
+    try {
+      ticket = await db().supportTicket.create({
+        data: { userId, type: user._count.orders ? "POST_SALE" : "PRE_SALE", status: "ANSWERED" },
+        include: { order: { select: { number: true } } },
+      });
+      created = true;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      ticket = await getOpenTicket(userId); // the customer opened one meanwhile
+      if (!ticket) throw err;
+    }
+  }
+  try {
+    const delivery = await replyToTicket(ticket.id, adminId, rawText, ip, image);
+    return { ticketId: ticket.id, number: ticket.number, created, delivery };
+  } catch (err) {
+    // Nothing reached the customer (e.g. the photo failed): don't leave an empty ticket behind.
+    if (created) await db().supportTicket.delete({ where: { id: ticket.id } }).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** One-off notice to a single customer (no ticket, nothing to answer). */
+export async function sendCustomerNotice(userId: string, adminId: string, rawText: string, ip: string | null, image?: UploadedImage) {
+  const text = cleanText(rawText, Boolean(image));
+  const user = await db().user.findUnique({ where: { id: userId } });
+  if (!user) throw Errors.notFound("Customer");
+  const html = t(user.locale ?? detectLocale(user.languageCode), "customer_notice", { text }).trim();
+  const chatId = String(user.telegramId);
+  if (image) {
+    await sendPhotoMessage(chatId, html, image, undefined, "aviso", { userId });
+  } else {
+    try {
+      await sendHtml(chatId, html);
+    } catch (err) {
+      logger.warn("support.notice_failed", { err, userId });
+      throw Errors.badRequest(`O aviso não foi entregue (o cliente pode ter bloqueado o bot): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  await audit({ actorType: "ADMIN", adminId, ip, action: AuditActions.CUSTOMER_NOTICE_SENT, resourceType: "user", resourceId: userId, details: { text: text.slice(0, 500), image: Boolean(image) } });
 }
 
 export async function setTicketStatus(ticketId: string, status: "OPEN" | "CLOSED", adminId: string, ip: string | null) {

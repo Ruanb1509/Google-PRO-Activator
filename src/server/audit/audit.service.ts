@@ -66,6 +66,7 @@ export const AuditActions = {
   ADMIN_CREATED: "admin.created",
   ADMIN_UPDATED: "admin.updated",
   CUSTOMER_UPDATED: "customer.updated",
+  CUSTOMER_NOTICE_SENT: "customer.notice_sent",
   SUPPORT_REPLIED: "support.replied",
   SUPPORT_STATUS_CHANGED: "support.status_changed",
 } as const;

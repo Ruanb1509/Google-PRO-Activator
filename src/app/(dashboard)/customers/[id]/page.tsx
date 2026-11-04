@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, fmtDate, fmtUSD, money, toCents } from "@/lib/api";
+import { prepareImage, type Attachment } from "@/lib/image-upload";
 import { userLabel } from "@/lib/types";
 import { useAction, useApi } from "@/components/use-api";
 import { useCan } from "@/components/admin-context";
@@ -27,6 +28,114 @@ interface CustomerDetail {
   orders: { id: string; number: number; productName: string; status: string; amountCents: number; currency: string; paymentMethod: string; createdAt: string }[];
   deposits: { id: string; status: string; expectedCents: number; creditedCents: number | null; asset: string; providerTxId: string | null; createdAt: string }[];
   ledger: { id: string; type: string; amountCents: number; balanceAfterCents: number; note: string | null; orderId: string | null; createdAt: string }[];
+  openTicket: { id: string; number: number; status: string } | null;
+}
+
+const MAX_MESSAGE_LENGTH = 3500;
+
+/**
+ * Admin writes to the customer first: "conversa" goes into a support ticket (opened if needed) the customer
+ * can answer in the bot; "aviso" is a one-off message with nothing to answer.
+ */
+function ContactCard({ customer }: { customer: CustomerDetail }) {
+  const router = useRouter();
+  const action = useAction();
+  const [text, setText] = useState("");
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => () => {
+    if (attachment) URL.revokeObjectURL(attachment.previewUrl);
+  }, [attachment]);
+
+  async function attach(file: File | undefined | null) {
+    if (!file) return;
+    try {
+      setAttachment(await prepareImage(file));
+    } catch (err) {
+      action.setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function send(mode: "chat" | "notice") {
+    if (!text.trim() && !attachment) return action.setError("Escreva uma mensagem ou anexe uma imagem.");
+    const image = attachment ? { contentType: attachment.contentType, base64: attachment.base64 } : undefined;
+    const r = await action.run(mode, () =>
+      api<{ ticketId?: string; delivery?: { delivered: boolean; error?: string } }>(`/api/admin/customers/${customer.id}/message`, { method: "POST", body: { mode, text: text.trim(), image } }),
+    );
+    if (!r) return;
+    setText("");
+    setAttachment(null);
+    if (mode === "chat" && r.ticketId) return router.push(`/support/${r.ticketId}`);
+    action.setMessage("Aviso entregue no bot.");
+  }
+
+  return (
+    <Card title="💬 Falar com o cliente" className="lg:col-span-3">
+      <div className="space-y-3">
+        {action.error && <ErrorBox error={action.error} />}
+        {action.message && <Notice>{action.message}</Notice>}
+        {customer.openTicket && (
+          <p className="text-sm text-muted">
+            Este cliente já tem o{" "}
+            <Link className="text-accent hover:underline" href={`/support/${customer.openTicket.id}`}>
+              ticket #{customer.openTicket.number}
+            </Link>{" "}
+            aberto — uma nova conversa entra nele.
+          </p>
+        )}
+        <textarea
+          className="input min-h-28"
+          maxLength={MAX_MESSAGE_LENGTH}
+          placeholder="Escreva a mensagem que o cliente vai receber no bot…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
+            if (file) {
+              e.preventDefault();
+              void attach(file);
+            }
+          }}
+        />
+        {attachment && (
+          <div className="flex items-start gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={attachment.previewUrl} alt="Imagem anexada" className="max-h-40 rounded-lg border border-line" />
+            <button type="button" onClick={() => setAttachment(null)} className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:border-accent hover:text-fg">
+              Remover
+            </button>
+          </div>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            void attach(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-muted">
+            <b>Conversa</b>: abre um ticket de suporte e o cliente pode responder. <b>Aviso</b>: só uma mensagem, sem resposta.
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => fileRef.current?.click()} disabled={Boolean(action.busy)}>
+              📎 {attachment ? "Trocar imagem" : "Anexar imagem"}
+            </Button>
+            <Button onClick={() => void send("notice")} loading={action.busy === "notice"} disabled={Boolean(action.busy)}>
+              📢 Enviar aviso
+            </Button>
+            <Button variant="primary" onClick={() => void send("chat")} loading={action.busy === "chat"} disabled={Boolean(action.busy)}>
+              💬 {customer.openTicket ? `Enviar no ticket #${customer.openTicket.number}` : "Iniciar conversa"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
 }
 
 export default function CustomerDetailPage() {
@@ -85,6 +194,8 @@ export default function CustomerDetailPage() {
       {action.message && <div className="mb-3"><Notice>{action.message}</Notice></div>}
 
       <div className="grid gap-4 lg:grid-cols-3">
+        {canStaff && <ContactCard customer={data} />}
+
         <Card title="Dados">
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <Info label="Username" value={data.username ? `@${data.username}` : "—"} />

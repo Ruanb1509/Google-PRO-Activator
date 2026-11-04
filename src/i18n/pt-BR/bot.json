@@ -94,6 +94,7 @@
   "support_status_ANSWERED": "respondido",
   "support_status_CLOSED": "encerrado",
   "support_reply": "💬 <b>Suporte — ticket #{number}</b>\n\n{text}",
+  "customer_notice": "📢 <b>Aviso da equipe</b>\n\n{text}",
   "support_reply_button": "✍️ Responder",
   "support_write_button": "✍️ Enviar mensagem",
   "support_close_button": "✅ Encerrar ticket",
