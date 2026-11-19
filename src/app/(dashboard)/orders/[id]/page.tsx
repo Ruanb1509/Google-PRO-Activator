@@ -9,7 +9,7 @@ import { useAction, useApi } from "@/components/use-api";
 import { useCan } from "@/components/admin-context";
 import { InventoryStatusBadge, OrderStatusBadge, PaymentStatusBadge } from "@/components/status";
 import { Badge, Button, Card, ErrorBox, Info, JsonView, LinkButton, Loading, Notice, PageHeader } from "@/components/ui";
-import { DeliveryCard, type Delivery } from "@/components/delivery-card";
+import { CopyButton, DeliveryCard, type Delivery } from "@/components/delivery-card";
 
 interface OrderDetail {
   id: string;
@@ -48,6 +48,7 @@ interface OrderDetail {
   inventoryItems: { id: string; valuePreview: string; status: string; soldAt: string | null }[];
   events: { id: string; type: string; message: string | null; actorType: string; createdAt: string; details: unknown }[];
   ledger: { id: string; type: string; amountCents: number; balanceAfterCents: number; createdAt: string }[];
+  supplierCodes: string[];
 }
 
 export default function OrderDetailPage() {
@@ -147,6 +148,23 @@ export default function OrderDetailPage() {
         <Card title="Pedido">
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <Info label="ID" value={<span className="break-all font-mono text-xs">{data.id}</span>} />
+            <Info
+              label="ID do pedido no fornecedor"
+              value={
+                data.supplierCodes.length ? (
+                  <span className="flex flex-col gap-1">
+                    {data.supplierCodes.map((c) => (
+                      <span key={c} className="flex flex-wrap items-center gap-2">
+                        <span className="break-all font-mono text-xs">{c}</span>
+                        <CopyButton value={c} />
+                      </span>
+                    ))}
+                  </span>
+                ) : (
+                  "—"
+                )
+              }
+            />
             <Info label="Produto" value={<Link className="text-accent hover:underline" href={`/products/${data.product.id}`}>{data.productName}</Link>} />
             <Info label="Quantidade" value={data.quantity} />
             <Info label="Valor total" value={money(data.amountCents, data.currency)} />

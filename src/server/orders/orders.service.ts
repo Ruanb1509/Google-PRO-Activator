@@ -1,5 +1,6 @@
 import type { Prisma, User } from "@/generated/prisma/client";
 import { productUnitCents } from "@/lib/bulk-discounts";
+import { SUPPLIER_BATCH_PREFIX, supplierOrderCodes } from "@/lib/supplier-codes";
 import type { OrderStatus } from "@/generated/prisma/enums";
 import { db } from "@/server/common/db";
 import { AppError, Errors } from "@/server/common/errors";
@@ -257,7 +258,11 @@ export async function getUserOrder(userId: string, orderId: string) {
     await db().order.updateMany({ where: { id: order.id, status: "PAID" }, data: { status: "DELIVERED", deliveredAt: new Date(), deliveryError: null } });
     await orderEvent({ orderId: order.id, type: "DELIVERED", actorType: "BOT", message: "Items shown in the customer's order view" });
   }
-  return { order, items: canSeeItems ? order.inventoryItems.map((i) => decrypt(i.valueEncrypted)) : [] };
+  return {
+    order,
+    items: canSeeItems ? order.inventoryItems.map((i) => decrypt(i.valueEncrypted)) : [],
+    supplierCodes: canSeeItems ? supplierOrderCodes(order.inventoryItems) : [],
+  };
 }
 
 export interface OrderFilters {
@@ -288,6 +293,7 @@ export async function listOrders(f: OrderFilters) {
       ...(/^\d{5,20}$/.test(q) ? [{ user: { telegramId: BigInt(q) } }] : []),
       { user: { username: { contains: q.replace(/^@/, ""), mode: "insensitive" } } },
       { payment: { providerPaymentId: q } },
+      { inventoryItems: { some: { batchId: `${SUPPLIER_BATCH_PREFIX}${q}` } } },
       { id: q },
     ];
   }
@@ -301,11 +307,20 @@ export async function listOrders(f: OrderFilters) {
       include: {
         user: { select: { id: true, telegramId: true, username: true, firstName: true } },
         payment: { select: { provider: true, status: true, providerPaymentId: true } },
-        inventoryItems: { select: { id: true, valuePreview: true, status: true }, orderBy: { createdAt: "asc" } },
+        inventoryItems: { select: { id: true, valuePreview: true, status: true, batchId: true }, orderBy: { createdAt: "asc" } },
       },
     }),
   ]);
-  return { total, page: f.page, pageSize: f.pageSize, items };
+  return {
+    total,
+    page: f.page,
+    pageSize: f.pageSize,
+    items: items.map(({ inventoryItems, ...o }) => ({
+      ...o,
+      inventoryItems: inventoryItems.map((i) => ({ id: i.id, valuePreview: i.valuePreview, status: i.status })),
+      supplierCodes: supplierOrderCodes(inventoryItems.filter((i) => i.status === "SOLD")),
+    })),
+  };
 }
 
 export async function getOrderDetail(id: string) {
@@ -315,7 +330,7 @@ export async function getOrderDetail(id: string) {
       user: true,
       product: { select: { id: true, name: true } },
       payment: { include: { events: { orderBy: { createdAt: "asc" }, select: { id: true, eventId: true, eventType: true, signatureValid: true, processedAt: true, error: true, createdAt: true } } } },
-      inventoryItems: { select: { id: true, valuePreview: true, status: true, soldAt: true }, orderBy: { createdAt: "asc" } },
+      inventoryItems: { select: { id: true, valuePreview: true, status: true, soldAt: true, batchId: true }, orderBy: { createdAt: "asc" } },
       events: { orderBy: { createdAt: "asc" } },
       ledger: true,
     },
@@ -323,7 +338,10 @@ export async function getOrderDetail(id: string) {
   if (!order) throw Errors.notFound("Order");
   const { metadata, ...payment } = order.payment ?? ({} as NonNullable<typeof order.payment>);
   void metadata; // may contain a large QR image; not needed in the dashboard
-  return { ...order, payment: order.payment ? payment : null };
+  // Codes of the supplier purchases that filled this order (falls back to every bound item, e.g. after a refund).
+  const sold = order.inventoryItems.filter((i) => i.status === "SOLD");
+  const supplierCodes = supplierOrderCodes(sold.length ? sold : order.inventoryItems);
+  return { ...order, payment: order.payment ? payment : null, supplierCodes };
 }
 
 // ───────────────────────── Admin actions ─────────────────────────

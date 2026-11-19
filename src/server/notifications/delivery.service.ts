@@ -3,7 +3,8 @@ import type { Locale } from "@/generated/prisma/enums";
 import { db } from "@/server/common/db";
 import { decrypt } from "@/server/common/crypto";
 import { logger } from "@/server/common/logger";
-import { t, escapeHtml, formatItems } from "@/i18n";
+import { t, escapeHtml, formatItems, supplierCodeHtml } from "@/i18n";
+import { supplierOrderCodes } from "@/lib/supplier-codes";
 import { Errors } from "@/server/common/errors";
 import { audit, AuditActions } from "@/server/audit/audit.service";
 import { orderEvent } from "@/server/orders/order-events";
@@ -18,13 +19,15 @@ export function deliveryMessageHtml(
   order: { number: number; quantity: number; product: Pick<Product, "name" | "nameEn"> },
   values: string[],
   locale: Locale,
+  supplierCodes: string[] = [],
 ): string {
-  return t(
+  const message = t(
     locale,
     "payment_confirmed",
     { product: localizedName(order.product, locale), quantity: order.quantity, number: order.number },
     { items: formatItems(values, locale) },
   );
+  return message + supplierCodeHtml(supplierCodes, locale);
 }
 
 export type DeliveryOutcome = "delivered" | "skipped" | "failed";
@@ -59,7 +62,7 @@ export async function deliverOrder(orderId: string, opts: { resend?: boolean; ad
 
   const locale = order.user.locale ?? order.locale;
   try {
-    const html = deliveryMessageHtml(order, items.map((i) => decrypt(i.valueEncrypted)), locale);
+    const html = deliveryMessageHtml(order, items.map((i) => decrypt(i.valueEncrypted)), locale, supplierOrderCodes(items));
     await sendHtml(order.user.telegramId, html, items.length >= FILE_EXPORT_MIN_QTY ? downloadKeyboard(order.id, locale) : undefined);
     await db().order.updateMany({
       where: { id: orderId, status: { in: ["PAID", "DELIVERED"] } },
@@ -115,13 +118,14 @@ export async function getOrderDelivery(orderId: string, viewer: { adminId: strin
     include: {
       user: { select: { locale: true } },
       product: { select: { name: true, nameEn: true } },
-      inventoryItems: { where: { status: "SOLD" }, orderBy: { createdAt: "asc" }, select: { valueEncrypted: true } },
+      inventoryItems: { where: { status: "SOLD" }, orderBy: { createdAt: "asc" }, select: { valueEncrypted: true, batchId: true } },
       events: { where: { type: { in: ["DELIVERED", "DELIVERY_RESENT", "DELIVERY_FAILED"] } }, orderBy: { createdAt: "asc" }, select: { type: true, actorType: true, message: true, createdAt: true } },
     },
   });
   if (!order) throw Errors.notFound("Order");
 
   const items = order.inventoryItems.map((i) => decrypt(i.valueEncrypted));
+  const supplierCodes = supplierOrderCodes(order.inventoryItems);
   // Same rule as the delivery: the locale the customer has now, falling back to the order's.
   const locale = order.user.locale ?? order.locale;
   await audit({
@@ -144,7 +148,8 @@ export async function getOrderDelivery(orderId: string, viewer: { adminId: strin
     deliveryError: order.deliveryError,
     locale,
     items,
-    messageHtml: items.length >= order.quantity ? deliveryMessageHtml(order, items, locale) : null,
+    supplierCodes,
+    messageHtml: items.length >= order.quantity ? deliveryMessageHtml(order, items, locale, supplierCodes) : null,
     events: order.events,
   };
 }

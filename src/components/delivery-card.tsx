@@ -17,6 +17,7 @@ export interface Delivery {
   deliveryError: string | null;
   locale: "pt_BR" | "en_US";
   items: string[];
+  supplierCodes?: string[];
   messageHtml: string | null;
   events: { type: string; actorType: string; message: string | null; createdAt: string }[];
 }
@@ -28,7 +29,7 @@ function deliveryEventLabel(e: Delivery["events"][number]): string {
   return "Mensagem de entrega enviada pelo bot no Telegram";
 }
 
-function CopyButton({ value }: { value: string }) {
+export function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <Button

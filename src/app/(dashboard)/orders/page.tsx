@@ -23,6 +23,7 @@ interface OrderRow {
   deliveredAt: string | null;
   payment: { provider: string; status: string; providerPaymentId: string | null } | null;
   inventoryItems: { id: string; valuePreview: string; status: string }[];
+  supplierCodes: string[];
 }
 
 const FILTERS: { key: string; label: string; status?: string; delivered?: "yes" | "no" }[] = [
@@ -86,7 +87,7 @@ export default function OrdersPage() {
             setPage(1);
           }}
         >
-          <input className="input lg:w-72" value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Nº, Telegram ID, @usuário, ID do pagamento" />
+          <input className="input lg:w-72" value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Nº, Telegram ID, @usuário, ID do pagamento ou do fornecedor" />
         </form>
       </div>
       {userId && (
@@ -118,6 +119,7 @@ export default function OrdersPage() {
                   <Th>Status</Th>
                   <Th>Data</Th>
                   <Th>Item entregue</Th>
+                  <Th>ID fornecedor</Th>
                 </tr>
               </thead>
               <tbody>
@@ -161,6 +163,15 @@ export default function OrdersPage() {
                         "—"
                       )}
                       {o.deliveredAt && <div className="text-xs text-muted">{fmtDate(o.deliveredAt)}</div>}
+                    </Td>
+                    <Td>
+                      {o.supplierCodes.length
+                        ? o.supplierCodes.map((c) => (
+                            <div key={c} className="select-all whitespace-nowrap font-mono text-xs">
+                              {c}
+                            </div>
+                          ))
+                        : "—"}
                     </Td>
                   </tr>
                 ))}

@@ -60,3 +60,9 @@ export function allTranslations(key: MessageKey): string[] {
 export function dictionary(locale: Locale): Record<MessageKey, string> {
   return dictionaries[locale];
 }
+
+/** "Order code: X" block for supplier-filled orders (the code the supplier asks for on a warranty claim); "" when there is none. */
+export function supplierCodeHtml(codes: string[], locale: Locale): string {
+  if (!codes.length) return "";
+  return t(locale, "supplier_code", {}, { codes: codes.map((c) => `<code>${escapeHtml(c)}</code>`).join(", ") });
+}

@@ -42,6 +42,7 @@
   "order_button": "#{number} · {product} · {status}",
   "order_details": "🧾 <b>Pedido #{number}</b>\nProduto: {product}\nQuantidade: {quantity}\nValor: {amount}\nPagamento: {method}\nStatus: <b>{status}</b>\nData: {date}",
   "order_access": "\n\n<b>Seu acesso:</b>\n{items}",
+  "supplier_code": "\n\n🔖 <b>Código do pedido:</b> {codes}\n<i>Informe este código ao suporte se tiver algum problema.</i>",
   "status_PENDING": "⏳ Pendente",
   "status_PAID": "💰 Pago",
   "status_DELIVERED": "✅ Entregue",

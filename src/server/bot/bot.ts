@@ -7,7 +7,7 @@ import { AppError } from "@/server/common/errors";
 import { logger } from "@/server/common/logger";
 import { formatMoney, parseMoneyToCents } from "@/server/common/money";
 import { rateLimit } from "@/server/common/rate-limit";
-import { allTranslations, detectLocale, escapeHtml, formatItems, t, type MessageKey } from "@/i18n";
+import { allTranslations, detectLocale, escapeHtml, formatItems, supplierCodeHtml, t, type MessageKey } from "@/i18n";
 import { serviceEmoji } from "@/lib/service-emoji";
 import { bulkDiscountTiers, bulkPercentOff, discountedUnitCents, productUnitCents } from "@/lib/bulk-discounts";
 import { setBotState, setLocale, upsertTelegramUser } from "@/server/users/users.service";
@@ -375,7 +375,7 @@ async function showOrders(ctx: StoreContext) {
 async function showOrder(ctx: StoreContext, orderId: string) {
   const found = await getUserOrder(ctx.user.id, orderId);
   if (!found) return ctx.reply(ctx.tr("orders_empty"));
-  const { order, items } = found;
+  const { order, items, supplierCodes } = found;
   let text = ctx.tr("order_details", {
     number: order.number,
     product: order.productName,
@@ -385,7 +385,7 @@ async function showOrder(ctx: StoreContext, orderId: string) {
     status: ctx.tr(`status_${order.status}` as MessageKey),
     date: order.createdAt.toLocaleString(ctx.locale === "pt_BR" ? "pt-BR" : "en-US", { timeZone: "America/Sao_Paulo" }),
   });
-  if (items.length) text += t(ctx.locale, "order_access", {}, { items: formatItems(items, ctx.locale) });
+  if (items.length) text += t(ctx.locale, "order_access", {}, { items: formatItems(items, ctx.locale) }) + supplierCodeHtml(supplierCodes, ctx.locale);
   const kb = items.length >= FILE_EXPORT_MIN_QTY ? downloadKeyboard(order.id, ctx.locale).row() : new InlineKeyboard();
   if (order.status === "PENDING") {
     if (order.payment?.checkoutUrl && !order.payment.pixCopyPaste) kb.url(ctx.tr("pay_button"), order.payment.checkoutUrl).row();
