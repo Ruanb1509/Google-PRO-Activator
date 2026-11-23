@@ -24,6 +24,8 @@ export interface ProductPayload {
   supplierSlug: string | null;
   supplierMaxCostCents: number | null;
   bulkDiscounts: BulkDiscount[];
+  deliveryNote: string | null;
+  deliveryNoteEn: string | null;
 }
 
 export function ProductForm({
@@ -50,6 +52,8 @@ export function ProductForm({
   const [supplierSlug, setSupplierSlug] = useState(initial?.supplierSlug ?? "");
   const [supplierMaxCost, setSupplierMaxCost] = useState(centsToInput(initial?.supplierMaxCostCents));
   const [bulkDiscounts, setBulkDiscounts] = useState(formatBulkDiscounts(bulkDiscountTiers(initial?.bulkDiscounts)));
+  const [deliveryNote, setDeliveryNote] = useState(initial?.deliveryNote ?? "");
+  const [deliveryNoteEn, setDeliveryNoteEn] = useState(initial?.deliveryNoteEn ?? "");
   const [logo, setLogo] = useState<LogoValue>({ logoKey: initial?.logoKey ?? null, logoImage: undefined });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -86,6 +90,8 @@ export function ProductForm({
         supplierSlug: supplierSlug.trim() || null,
         supplierMaxCostCents,
         bulkDiscounts: tiers,
+        deliveryNote: deliveryNote.trim() || null,
+        deliveryNoteEn: deliveryNoteEn.trim() || null,
         logoKey: logo.logoKey,
         ...(logo.logoImage !== undefined ? { logoImage: logo.logoImage } : {}),
       });
@@ -140,6 +146,18 @@ export function ProductForm({
         </Field>
         <Field label="Desconto por quantidade" hint="quantidade:porcentagem — ex.: 5:11, 11:22, 25:33 (a partir de 5 un. 11% off...). Máx. 50%. Vazio = sem desconto.">
           <input className="input" value={bulkDiscounts} onChange={(e) => setBulkDiscounts(e.target.value)} placeholder="sem desconto" />
+        </Field>
+        <Field label="Mensagem personalizada na entrega (pt-BR)" hint="Enviada ao cliente logo após a mensagem de entrega. Vazio = nenhuma.">
+          <textarea
+            className="input min-h-24"
+            maxLength={2000}
+            value={deliveryNote}
+            onChange={(e) => setDeliveryNote(e.target.value)}
+            placeholder="ex.: Obrigado pela compra! Para ativar, acesse o link e entre com sua conta Google..."
+          />
+        </Field>
+        <Field label="Mensagem personalizada na entrega (en-US)" hint="Opcional — para clientes em inglês. Vazio = usa a versão pt-BR.">
+          <textarea className="input min-h-24" maxLength={2000} value={deliveryNoteEn} onChange={(e) => setDeliveryNoteEn(e.target.value)} />
         </Field>
         <label className="flex items-center gap-2 self-end pb-2 text-sm">
           <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} /> Produto ativo (visível no bot)

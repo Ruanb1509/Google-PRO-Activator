@@ -30,6 +30,9 @@ export interface Product {
   supplierMaxCostCents: number | null;
   /** Quantity discounts [{ minQty, percentOff }] (null/empty = none). */
   bulkDiscounts: { minQty: number; percentOff: number }[] | null;
+  /** Custom message sent right after the delivery (pt-BR / en-US). */
+  deliveryNote: string | null;
+  deliveryNoteEn: string | null;
   createdAt: string;
   updatedAt: string;
 }

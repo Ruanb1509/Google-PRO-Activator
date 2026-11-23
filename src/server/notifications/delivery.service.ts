@@ -10,7 +10,7 @@ import { audit, AuditActions } from "@/server/audit/audit.service";
 import { orderEvent } from "@/server/orders/order-events";
 import { downloadKeyboard, FILE_EXPORT_MIN_QTY } from "@/server/notifications/delivery-file";
 import { alertAdmins, sendHtml } from "@/server/notifications/telegram";
-import { localizedName } from "@/server/products/products.service";
+import { localizedDeliveryNote, localizedName } from "@/server/products/products.service";
 
 const MAX_ATTEMPTS = 8;
 
@@ -28,6 +28,12 @@ export function deliveryMessageHtml(
     { items: formatItems(values, locale) },
   );
   return message + supplierCodeHtml(supplierCodes, locale);
+}
+
+/** The product's custom delivery message as Telegram HTML (plain text, escaped), or null when none. */
+export function deliveryNoteHtml(product: Pick<Product, "deliveryNote" | "deliveryNoteEn">, locale: Locale): string | null {
+  const note = localizedDeliveryNote(product, locale);
+  return note ? escapeHtml(note) : null;
 }
 
 export type DeliveryOutcome = "delivered" | "skipped" | "failed";
@@ -64,6 +70,12 @@ export async function deliverOrder(orderId: string, opts: { resend?: boolean; ad
   try {
     const html = deliveryMessageHtml(order, items.map((i) => decrypt(i.valueEncrypted)), locale, supplierOrderCodes(items));
     await sendHtml(order.user.telegramId, html, items.length >= FILE_EXPORT_MIN_QTY ? downloadKeyboard(order.id, locale) : undefined);
+    // The product's custom message goes right after the delivery. Best effort: the items already
+    // reached the customer, so a failure here must not mark the delivery as failed (or resend it).
+    const note = deliveryNoteHtml(order.product, locale);
+    if (note) {
+      await sendHtml(order.user.telegramId, note).catch((err) => logger.warn("delivery.note_failed", { err, orderId }));
+    }
     await db().order.updateMany({
       where: { id: orderId, status: { in: ["PAID", "DELIVERED"] } },
       data: { status: "DELIVERED", deliveredAt: order.deliveredAt ?? new Date(), deliveryError: null, deliveryLockedUntil: null },
@@ -117,7 +129,7 @@ export async function getOrderDelivery(orderId: string, viewer: { adminId: strin
     where: { id: orderId, ...(viewer.userId ? { userId: viewer.userId } : {}) },
     include: {
       user: { select: { locale: true } },
-      product: { select: { name: true, nameEn: true } },
+      product: { select: { name: true, nameEn: true, deliveryNote: true, deliveryNoteEn: true } },
       inventoryItems: { where: { status: "SOLD" }, orderBy: { createdAt: "asc" }, select: { valueEncrypted: true, batchId: true } },
       events: { where: { type: { in: ["DELIVERED", "DELIVERY_RESENT", "DELIVERY_FAILED"] } }, orderBy: { createdAt: "asc" }, select: { type: true, actorType: true, message: true, createdAt: true } },
     },
@@ -150,6 +162,8 @@ export async function getOrderDelivery(orderId: string, viewer: { adminId: strin
     items,
     supplierCodes,
     messageHtml: items.length >= order.quantity ? deliveryMessageHtml(order, items, locale, supplierCodes) : null,
+    /** The product's current custom delivery message (sent right after the delivery message). */
+    noteHtml: deliveryNoteHtml(order.product, locale),
     events: order.events,
   };
 }

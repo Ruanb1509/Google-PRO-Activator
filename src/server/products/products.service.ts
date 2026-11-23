@@ -67,6 +67,9 @@ export const productInputSchema = z.object({
     .refine((tiers) => new Set(tiers.map((t) => t.minQty)).size === tiers.length, "Quantidade repetida nos descontos")
     .transform((tiers) => [...tiers].sort((a, b) => a.minQty - b.minQty))
     .optional(),
+  /** Custom message sent right after the delivery message (plain text; null = none). */
+  deliveryNote: z.string().trim().max(2000).nullish(),
+  deliveryNoteEn: z.string().trim().max(2000).nullish(),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
 export const productUpdateSchema = productInputSchema.partial();
@@ -200,6 +203,12 @@ function auditSafe<T extends { logoImage?: string | null }>(input: T) {
 
 export function localizedName(p: Pick<Product, "name" | "nameEn">, locale: "pt_BR" | "en_US"): string {
   return locale === "en_US" && p.nameEn ? p.nameEn : p.name;
+}
+
+/** The product's custom delivery message in the customer's language (falls back to pt-BR), or null. */
+export function localizedDeliveryNote(p: Pick<Product, "deliveryNote" | "deliveryNoteEn">, locale: "pt_BR" | "en_US"): string | null {
+  const note = locale === "en_US" && p.deliveryNoteEn ? p.deliveryNoteEn : p.deliveryNote;
+  return note?.trim() || null;
 }
 
 export function localizedDescription(p: Pick<Product, "description" | "descriptionEn">, locale: "pt_BR" | "en_US"): string {

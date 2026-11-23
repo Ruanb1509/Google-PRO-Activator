@@ -19,6 +19,8 @@ export interface Delivery {
   items: string[];
   supplierCodes?: string[];
   messageHtml: string | null;
+  /** The product's custom message, sent right after the delivery message. */
+  noteHtml?: string | null;
   events: { type: string; actorType: string; message: string | null; createdAt: string }[];
 }
 
@@ -118,6 +120,13 @@ export function DeliveryCard({
                 // Built server-side from our own template; every interpolated value is HTML-escaped.
                 dangerouslySetInnerHTML={{ __html: data.messageHtml }}
               />
+              {data.noteHtml && (
+                <div
+                  className="mt-1.5 max-w-md whitespace-pre-wrap break-words rounded-2xl rounded-tl-sm border border-line bg-card-2 px-3.5 py-2.5"
+                  // Plain text from the product's custom delivery message, HTML-escaped on the server.
+                  dangerouslySetInnerHTML={{ __html: data.noteHtml }}
+                />
+              )}
             </div>
           )}
 
